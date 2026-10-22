@@ -377,7 +377,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.1.0'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.1.1'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1239,21 +1239,23 @@ async function runCanProbe(ids, secs, out) {
   });
   const cmd = async (c, ms = 3000) => { rx = ''; await t.write(c + '\r'); return (await waitPrompt(ms)).replace(/[\r\n]+/g, ' ').trim(); };
   try {
-    log('ATZ → ' + await cmd('ATZ', 5000));
+    log('ATZ → ' + (await cmd('ATZ', 5000)).replace(/[^\x20-\x7E]/g, ''));
     for (const c of ['ATE0', 'ATL0', 'ATS1', 'ATH1', 'ATD0', 'ATCAF0', 'ATSP6']) { const r = await cmd(c); if (!/OK/.test(r)) log(c + ' → ' + r); }
     log('Adapter voltage (ATRV) → ' + await cmd('ATRV'));
     const FRAME = /^([0-9A-F]{3})((?: [0-9A-F]{2}){1,8})$/;
     async function monitor(label, filt, seconds) {
       if (dead) throw new Error('Adapter disconnected');
-      await cmd(filt ? 'ATCRA ' + filt : 'ATCRA');
+      // Clones differ: a bare ATCRA often does NOT clear the filter, so set/clear receive address, mask and filter explicitly.
+      const setup = filt ? ['ATCRA ' + filt, 'ATCM 7FF', 'ATCF ' + filt] : ['ATCRA', 'ATCM 000', 'ATCF 000'];
+      for (const c of setup) { const r = await cmd(c); if (!/OK/.test(r)) log('  ' + c + ' → ' + r); }
       rx = '';
-      const st = { frames: 0, ids: {}, errs: {}, sample: '' }; let pend = '';
+      const st = { frames: 0, ids: {}, errs: {}, sample: '', smp: {} }; let pend = '';
       const eat = (chunk) => {
         pend += chunk; const lines = pend.split(/[\r\n]+/); pend = lines.pop();
         for (let ln of lines) {
           ln = ln.replace(/>/g, '').trim(); if (!ln || /^ATMA|^OK$|^SEARCHING/i.test(ln)) continue;
           const m = ln.match(FRAME);
-          if (m) { st.frames++; st.ids[m[1]] = (st.ids[m[1]] || 0) + 1; if (!st.sample) st.sample = ln; }
+          if (m) { st.frames++; st.ids[m[1]] = (st.ids[m[1]] || 0) + 1; if (!st.sample) st.sample = ln; const a = st.smp[m[1]] || (st.smp[m[1]] = []); if (a.length < 4 && !a.includes(ln)) a.push(ln); }
           else { const k = /BUFFER FULL/i.test(ln) ? 'BUFFER FULL' : /DATA ERROR/i.test(ln) ? 'DATA ERROR' : /CAN ERROR/i.test(ln) ? 'CAN ERROR' : /STOPPED/i.test(ln) ? null : /^\?/.test(ln) ? '?' : 'other'; if (k) st.errs[k] = (st.errs[k] || 0) + 1; }
         }
       };
@@ -1267,6 +1269,7 @@ async function runCanProbe(ids, secs, out) {
       st.fps = Math.round(st.frames / el); st.label = label;
       const errTxt = Object.keys(st.errs).length ? '  ERRORS: ' + Object.entries(st.errs).map(([k, v]) => k + '×' + v).join(', ') : '';
       log(label.padEnd(14) + st.frames + ' frames, ' + st.fps + '/s, ' + Object.keys(st.ids).length + ' IDs' + errTxt);
+      if (filt) for (const l of (st.smp[filt] || [])) log('    ' + l);
       return st;
     }
     log('\n— Filtered listening (' + secs + 's each) —');
@@ -1277,6 +1280,8 @@ async function runCanProbe(ids, secs, out) {
     const top = Object.entries(all.ids).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => k + '×' + v).join('  ');
     if (top) log('Busiest IDs seen: ' + top);
     if (all.sample) log('Sample frame: ' + all.sample);
+    const bestF = filtered.reduce((m, f) => (f.fps > m.fps ? f : m), { fps: 0 });
+    if (bestF.fps > 0 && all.fps < bestF.fps * 0.8 && !Object.keys(all.errs).length) log('NOTE: the all-traffic test saw fewer frames than a single filtered ID did, so the adapter did not clear its filter. Ignore the stress-test numbers and the busiest-IDs list.');
     // verdict
     const seen = filtered.filter((f) => f.frames > 0), filtErr = filtered.some((f) => Object.keys(f.errs).length), allErr = Object.keys(all.errs).length > 0;
     log('\n— Result —');
