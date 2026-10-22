@@ -241,6 +241,8 @@ button{cursor:pointer;background:none;border:0}
     </div>
   </div>
 
+  <div class="card" style="margin-top:12px"><button class="row tap" id="rowTesla"><div class="grow"><b>Tesla tools</b><small>Battery monitor, used-car estimate, alert lookup</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button></div>
+
   <div id="liveArea" hidden>
     <div class="sect">Vehicle</div>
     <div class="card">
@@ -363,8 +365,9 @@ button{cursor:pointer;background:none;border:0}
     <button class="row tap" id="rowInstall" hidden><div class="grow">Install app<small>Add LazScan to your home screen</small></div></button>
   </div>
 
-  <div class="sect">Tesla (beta)</div>
-  <div class="card">
+  <div class="sect">Tesla</div>
+  <div class="card"><button class="row tap" id="rowTesla2"><div class="grow">Tesla tools<small>Pack monitor, used-car estimate, alert lookup, advanced CAN tools</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button></div>
+  <div id="tHidden" hidden>
     <button class="row tap" id="rowTMon"><div class="grow">Pack monitor<small>Live pack voltage, current and power. Needs a Tesla diagnostic cable.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowTAlert"><div class="grow">Tesla alert lookup<small>Type a code from Service Mode → Service Alerts. LazAI helps explain it.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowTEst"><div class="grow">Used Tesla battery estimate<small>Estimate health from the range and % on any Tesla's screen. No adapter needed.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
@@ -405,7 +408,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.5.0'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.6.0'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -758,6 +761,7 @@ function closeSheet() {
   $('sheetBg').classList.remove('open');
   if (sheetReturn && sheetReturn.focus) sheetReturn.focus();
   const cb = S.sheetOnClose; S.sheetOnClose = null; if (cb) cb();
+  if (S.backToHub) { S.backToHub = false; setTimeout(openTeslaHub, 0); }
 }
 $('sheetClose').addEventListener('click', closeSheet);
 $('sheetBg').addEventListener('click', (e) => { if (e.target === $('sheetBg')) closeSheet(); });
@@ -772,6 +776,7 @@ function confirmSheet(title, msg, label, danger) {
     openSheet(title, n, () => { if (!done) { done = true; resolve(false); } });
   });
 }
+const CHEV = '<svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg>';
 const I = {
   warn: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9.5 16h-19z"/><path d="M12 10v4.5M12 17.4v.1"/></svg>',
   check: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.6 2.6L16 9.5"/></svg>',
@@ -1607,6 +1612,22 @@ function openTeslaAlert() {
   openSheet('Tesla alert lookup', n);
 }
 $('rowTAlert').addEventListener('click', openTeslaAlert);
+
+function openTeslaHub() {
+  S.backToHub = false;
+  const item = (id, t, d, beta) => `<button class="row tap" data-r="${id}"><div class="grow">${t}${beta ? ' <span class="badge low" style="margin-left:6px">BETA</span>' : ''}<small>${d}</small></div>${CHEV}</button>`;
+  const n = html(`
+    <div class="sect" style="margin-top:0">Check a car</div>
+    <div class="card">${item('rowTEst', 'Used Tesla battery estimate', 'Health from the range and % on any Tesla screen. No adapter needed.', false)}</div>
+    <div class="sect">Scan your Tesla</div>
+    <div class="card">${item('rowTMon', 'Pack monitor', 'Live pack voltage, current, power, energy report and 12 V. Needs a Tesla diagnostic cable.', true)}${item('rowTAlert', 'Alert lookup', 'Explain a code from Service Mode → Service Alerts, with LazAI.', true)}</div>
+    <div class="sect">Advanced</div>
+    <div class="card">${item('rowProbe', 'CAN probe', 'Check which messages your adapter can hear. Read-only.', false)}${item('rowLog', 'CAN logger', 'Capture every message the car sends (about 4 min).', false)}</div>
+    <p class="tm-note">Tesla scanning is read-only: LazScan only listens to the car, it never sends commands. It cannot read stored alert codes from the car. For pack warnings or anything high-voltage, contact Tesla service.</p>`);
+  n.addEventListener('click', (e) => { const b = e.target.closest('[data-r]'); if (!b) return; S.backToHub = true; $(b.dataset.r).click(); });
+  openSheet('Tesla tools', n);
+}
+$('rowTesla').addEventListener('click', openTeslaHub); $('rowTesla2').addEventListener('click', openTeslaHub);
 
 function openTeslaEstimate() {
   const bands = [{ min: 92, c: 'var(--green)', t: 'Excellent' }, { min: 86, c: 'var(--blue)', t: 'Good' }, { min: 80, c: 'var(--yellow)', t: 'Fair' }, { min: 0, c: 'var(--red)', t: 'Worn: ask questions' }];
