@@ -404,7 +404,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.3.0'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.4.0'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1349,7 +1349,7 @@ $('rowProbe').addEventListener('click', () => {
 //  The monitor only listens to CAN message 0x102. The decode below is UNVERIFIED:
 //  bytes 0-1 = pack voltage (x0.01 V), bytes 2-3 = smoothed current (signed, x0.1 A).
 // ============================================================
-const TM_ID = '102', TM_FRAME = /^([0-9A-F]{3})((?: [0-9A-F]{2}){1,8})$/;
+const TM_ID = '102', TM_BMS = '382', TM_KWH = '3D2', TM_FRAME = /^([0-9A-F]{3})((?: [0-9A-F]{2}){1,8})$/;
 class CanMonitor {
   constructor() { this.t = null; this.rx = ''; this.pend = ''; this.mon = false; this.dead = false; this.onFrame = () => {}; this.onEnd = () => {}; }
   _data(x) {
@@ -1391,6 +1391,12 @@ class CanMonitor {
     if (this.t) { try { if (was) await this.t.write('\r'); } catch (e) {} await sleep(250); this.t.close(); }
   }
 }
+const tmBits = (b, st, w) => { let v = 0; for (let i = 0; i < w; i++) { const p = st + i; v += ((b[p >> 3] >> (p & 7)) & 1) * 2 ** i; } return v; };
+// Candidate decodes (UNVERIFIED labels, borrowed from a similar Tesla layout):
+//  0x382: five 11-bit fields at 0.1 kWh: full pack, remaining, expected remaining, ideal remaining, to-finish-charge; then a 9-bit reserve.
+//  0x3D2: two 32-bit lifetime counters at 0.001 kWh (bytes 0-3 charged, bytes 4-7 discharged).
+const tmEnergy = (b) => { if (b.length < 8) return null; const e = { full: tmBits(b, 0, 11) / 10, rem: tmBits(b, 11, 11) / 10, exp: tmBits(b, 22, 11) / 10, ideal: tmBits(b, 33, 11) / 10, toChg: tmBits(b, 44, 11) / 10, buf: tmBits(b, 55, 9) / 10 }; return e.full >= 20 && e.full <= 150 && e.rem <= e.full + 1 ? e : null; };
+const tmLife = (b) => (b.length < 8 ? null : { chg: ((b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0) / 1000, dis: ((b[4] | (b[5] << 8) | (b[6] << 16) | (b[7] << 24)) >>> 0) / 1000 });
 const tmDecode = (b) => (b.length < 4 ? null : { v: (b[0] | (b[1] << 8)) / 100, a: (((b[2] | (b[3] << 8)) << 16) >> 16) / 10 });
 const polar = (cx, cy, r, deg) => [cx + r * Math.cos((deg - 90) * Math.PI / 180), cy + r * Math.sin((deg - 90) * Math.PI / 180)];
 const arcPath = (cx, cy, r, a0, a1) => { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${x0.toFixed(1)} ${y0.toFixed(1)}A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`; };
@@ -1398,7 +1404,7 @@ const arcPath = (cx, cy, r, a0, a1) => { const [x0, y0] = polar(cx, cy, r, a0), 
 function openTeslaMonitor() {
   if (S.transport) { teardown(); setMode('idle'); }
   const VMIN = 250, VMAX = 400;
-  const st = { v: null, a: null, raw: '', hist: [], acc: { v: 0, p: 0, n: 0 }, whIn: 0, whOut: 0, last: 0, lastFrame: 0, frames: 0, running: false, tick: null, mon: null };
+  const st = { v: null, a: null, raw: '', hist: [], acc: { v: 0, p: 0, n: 0 }, whIn: 0, whOut: 0, last: 0, lastFrame: 0, frames: 0, running: false, tick: null, mon: null, en: null, life: null, rem0: null, enT: 0 };
   let cells = +lsGet('tesla_cells', '84'), chargePos = lsGet('tesla_sign', 'pos') === 'pos';
   const n = html(`
     <div style="display:flex;justify-content:space-between;align-items:center"><span class="chip" id="tmChip"><i></i><span id="tmChipT">Not connected</span></span><span class="mono" style="font-size:13px;color:var(--label2)" id="tmRate"></span></div>
@@ -1412,6 +1418,11 @@ function openTeslaMonitor() {
     <div class="card pad" style="margin-top:10px"><div class="sect" style="margin:0 0 6px">Last 3 minutes</div><svg id="tmChart" viewBox="0 0 300 110" style="width:100%;height:110px;display:block"></svg>
       <div class="legend"><span><i style="background:var(--blue)"></i>Pack voltage</span><span><i style="background:var(--orange)"></i>Power</span></div></div>
     <div class="card" style="margin-top:10px"><div class="vgrid"><div><span>Energy in</span><b id="tmIn">0 Wh</b></div><div><span>Energy out</span><b id="tmOut">0 Wh</b></div></div></div>
+    <div class="card pad stack" style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="sect" style="margin:0">Battery energy report</div><span class="badge medium">CANDIDATE</span></div>
+      <div id="tmEn" style="text-align:center"></div>
+      <div class="field"><label for="tmNF">Full pack when new (kWh)</label><input id="tmNF" class="input" inputmode="decimal" placeholder="75" style="text-align:right"></div>
+    </div>
     <div class="card pad stack" style="margin-top:10px">
       <div class="sect" style="margin:0">Capacity from this charge</div>
       <p style="font-size:13px;color:var(--label2)">Start the monitor, note the battery % on the car's screen, then charge. Enter both percentages. A bigger span gives a better result.</p>
@@ -1432,6 +1443,7 @@ function openTeslaMonitor() {
   const $n = (q) => n.querySelector(q);
   $n('#tmCells').value = String(cells); $n('#tmN').value = lsGet('tesla_new', '');
   $n('#tmN').addEventListener('input', () => lsSet('tesla_new', $n('#tmN').value));
+  $n('#tmNF').value = lsGet('tesla_newfull', ''); $n('#tmNF').addEventListener('input', () => { lsSet('tesla_newfull', $n('#tmNF').value); drawEn(); });
   const syncSeg = () => $n('#tmSign').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === 'pos') === chargePos)));
   syncSeg();
   $n('#tmCells').onchange = (e) => { cells = +e.target.value; lsSet('tesla_cells', String(cells)); draw(); };
@@ -1465,8 +1477,21 @@ function openTeslaMonitor() {
     $n('#tmDir').textContent = p == null ? 'Idle' : Math.abs(p) < 0.15 ? 'Idle' : (p > 0 ? 'Charging ' : 'Using ') + Math.abs(p).toFixed(1) + ' kW';
     $n('#tmIn').textContent = Math.round(st.whIn) + ' Wh'; $n('#tmOut').textContent = Math.round(st.whOut) + ' Wh';
     $n('#tmRaw').textContent = st.raw ? 'Last frame: ' + st.raw : '';
-    capCalc();
+    capCalc(); drawEn();
     drawChart();
+  }
+  function drawEn() {
+    const box = $n('#tmEn'), e = st.en, dim = 'color:var(--label3);font-size:14px';
+    if (!e) { box.innerHTML = `<span style="${dim}">${st.running ? 'Waiting for message 382 (about once a second)…' : 'Start the monitor to read the car’s own energy report.'}</span>`; return; }
+    const nw = parseFloat(String($n('#tmNF').value).replace(',', '.')), h = nw > 0 ? e.full / nw * 100 : null, pr = e.full > 0 ? e.rem / e.full * 100 : 0;
+    const cell = (l, v) => `<div><span>${l}</span><b>${v.toFixed(1)} kWh</b></div>`;
+    const dr = st.rem0 != null ? e.rem - st.rem0 : null, net = (st.whIn - st.whOut) / 1000;
+    box.innerHTML = `<div class="tm-big">${e.full.toFixed(1)}<span style="font-size:18px"> kWh</span></div><div style="color:var(--label2);font-size:14px;margin-top:4px">full pack energy (as the car reports it)</div>` +
+      (h ? `<div style="font-weight:700;font-size:20px;margin-top:6px">${h.toFixed(0)}% of new (${nw} kWh)</div>` : `<div style="${dim};margin-top:6px">Enter the full-pack figure from when the car was new to get a percentage.</div>`) +
+      `<div class="vgrid" style="margin-top:12px;text-align:left">${cell('Remaining', e.rem)}${cell('Expected remaining', e.exp)}${cell('Ideal remaining', e.ideal)}${cell('To finish charge', e.toChg)}${cell('Reserve', e.buf)}<div><span>Remaining ÷ full</span><b>${pr.toFixed(0)}%</b></div></div>` +
+      (dr != null && Math.abs(net) > 0.05 ? `<div style="${dim};margin-top:10px;text-align:left">Check: the car's remaining energy moved ${dr >= 0 ? '+' : ''}${dr.toFixed(1)} kWh while the monitor measured ${net >= 0 ? '+' : ''}${net.toFixed(2)} kWh at the pack. These should be close.</div>` : '') +
+      (st.life ? `<div style="${dim};margin-top:8px;text-align:left">Lifetime: ${(st.life.chg / 1000).toFixed(1)} MWh in, ${(st.life.dis / 1000).toFixed(1)} MWh out, about ${Math.round(st.life.chg / e.full)} full cycles.</div>` : '') +
+      `<div style="${dim};margin-top:8px;text-align:left;font-size:12px">Labels come from a similar Tesla layout and are not confirmed for your car. Compare "Remaining ÷ full" with the % on the screen.</div>`;
   }
   function capCalc() {
     const box = $n('#tmCap'), a = parseFloat($n('#tmS').value), b = parseFloat($n('#tmE').value), nw = parseFloat(String($n('#tmN').value).replace(',', '.'));
@@ -1503,9 +1528,9 @@ function openTeslaMonitor() {
     if (!navigator.bluetooth) { chip('bad', 'No Web Bluetooth'); return; }
     const mon = st.mon = new CanMonitor(); const btn = $n('#tmGo'); btn.disabled = true; chip('busy', 'Connecting…');
     mon.onEnd = (m) => stop(m);
-    mon.onFrame = (id, b) => { if (id !== TM_ID) return; st.frames++; st.lastFrame = Date.now(); st.raw = id + ' ' + b.map(hex2).join(' '); const d = tmDecode(b); if (d && d.v > 150 && d.v < 500) { st.v = d.v; st.a = d.a; } };
+    mon.onFrame = (id, b) => { if (id === TM_BMS) { const e = tmEnergy(b); if (e) { st.en = e; if (st.rem0 == null) st.rem0 = e.rem; } return; } if (id === TM_KWH) { const l = tmLife(b); if (l) st.life = l; return; } if (id !== TM_ID) return; st.frames++; st.lastFrame = Date.now(); st.raw = id + ' ' + b.map(hex2).join(' '); const d = tmDecode(b); if (d && d.v > 150 && d.v < 500) { st.v = d.v; st.a = d.a; } };
     try {
-      await mon.open(); chip('busy', 'Starting…'); await mon.start(TM_ID);
+      await mon.open(); chip('busy', 'Starting…'); await mon.startMasked(TM_ID, '52F'); // mask 52F passes 102, 382 and 3D2 (plus a few IDs this car does not use)
       st.running = true; st.last = Date.now(); st.lastFrame = Date.now(); st.tick = setInterval(tick, 250);
       try { if (navigator.wakeLock) st.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
       btn.textContent = 'Stop'; btn.disabled = false; chip('busy', 'Waiting for data…');
