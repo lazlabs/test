@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="garage">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LazScan</title>
+<meta name="description" content="OBD-II diagnostics with an AI mechanic: read codes and live data over Bluetooth, check NHTSA recalls, tag parts with NFC.">
+<meta name="theme-color" content="#F2F4F8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="LazScan">
+<meta name="application-name" content="LazScan">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" type="image/png" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<script>
+// Resolve theme before first paint. Default: Garage Day (light).
+(function(){try{
+  var t=localStorage.getItem('lazscan_theme');
+  if(t==='light'||!t)t='garage'; else if(t==='dark'||t==='amber')t='midnight';
+  var r=t==='auto'?(matchMedia('(prefers-color-scheme: dark)').matches?'midnight':'garage'):t;
+  document.documentElement.setAttribute('data-theme',r);
+}catch(e){}})();
+</script>
+<style>
+:root{
+  /* Garage Day (default) — palette taken from the LazScan icon: navy, electric blue, orange */
+  --bg:#F2F4F8; --elev:#FFFFFF; --sunk:#E7EBF2;
+  --label:#0C1A33; --label2:#52627D; --label3:#8593AA;
+  --sep:rgba(12,36,84,.12);
+  --blue:#0A6FCB; --on-blue:#FFFFFF; --blue-soft:rgba(10,111,203,.10);
+  --orange:#FF7A1A; --orange-text:#B54700; --orange-soft:rgba(255,122,26,.14);
+  --green:#1B8A4B; --green-soft:rgba(27,138,75,.12);
+  --red:#D12B2B; --red-soft:rgba(209,43,43,.10);
+  --yellow:#8A6A00; --yellow-soft:rgba(240,180,0,.16);
+  --bar:rgba(250,251,253,.86); --shadow:0 1px 2px rgba(12,36,84,.06),0 6px 20px rgba(12,36,84,.06);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI",Roboto,"Helvetica Neue",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --tab-h:56px;
+  color-scheme:light;
+}
+[data-theme="midnight"]{
+  --bg:#050F26; --elev:#0D1E45; --sunk:#091735;
+  --label:#EAF1FF; --label2:#9DB0D3; --label3:#6D82AA;
+  --sep:rgba(255,255,255,.10);
+  --blue:#4DA6FF; --on-blue:#04112B; --blue-soft:rgba(77,166,255,.16);
+  --orange:#FF8A33; --orange-text:#FF9A4D; --orange-soft:rgba(255,138,51,.16);
+  --green:#32D074; --green-soft:rgba(50,208,116,.15);
+  --red:#FF7070; --red-soft:rgba(255,112,112,.15);
+  --yellow:#FFD24D; --yellow-soft:rgba(255,210,77,.15);
+  --bar:rgba(8,20,48,.84); --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--label);font:400 17px/1.35 var(--font);-webkit-font-smoothing:antialiased;min-height:100vh;min-height:100dvh;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) calc(var(--tab-h) + env(safe-area-inset-bottom) + 24px) env(safe-area-inset-left)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+:focus-visible{outline:3px solid var(--blue);outline-offset:2px;border-radius:8px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.mono{font-family:var(--mono)}
+
+/* nav bar that fades in once the large title scrolls away */
+.navbar{position:fixed;top:0;left:0;right:0;z-index:20;padding-top:env(safe-area-inset-top);height:calc(44px + env(safe-area-inset-top));
+  background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:.5px solid transparent;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s,border-color .2s}
+.navbar.on{opacity:1;border-bottom-color:var(--sep)}
+.navbar b{font-weight:600;font-size:17px}
+.wrap{max-width:640px;margin:0 auto;padding:0 16px}
+.top{display:flex;align-items:flex-end;justify-content:space-between;padding:20px 0 10px;min-height:76px}
+.large{font-size:34px;font-weight:700;letter-spacing:.2px;line-height:1.1}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;padding:5px 11px;border-radius:99px;background:var(--sunk);color:var(--label2)}
+.chip i{width:8px;height:8px;border-radius:50%;background:var(--label3)}
+.chip.ok{background:var(--green-soft);color:var(--green)} .chip.ok i{background:var(--green)}
+.chip.busy{background:var(--blue-soft);color:var(--blue)} .chip.busy i{background:var(--blue);animation:pulse 1.1s infinite}
+.chip.demo{background:var(--orange-soft);color:var(--orange-text)} .chip.demo i{background:var(--orange)}
+.chip.bad{background:var(--red-soft);color:var(--red)} .chip.bad i{background:var(--red)}
+@keyframes pulse{50%{opacity:.25}}
+
+[hidden]{display:none!important}
+.sect{margin:22px 0 8px 16px;font-size:13px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--label2)}
+.sect-row{display:flex;align-items:baseline;justify-content:space-between;margin:22px 16px 8px}
+.sect-row .sect{margin:0}
+.foot{margin:8px 16px 0;font-size:13px;color:var(--label2)}
+.card{background:var(--elev);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.pad{padding:16px}
+.row{display:flex;align-items:center;gap:12px;min-height:48px;padding:10px 16px;position:relative;width:100%;text-align:left}
+.row+.row::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--sep)}
+.row .grow{flex:1;min-width:0}
+.row small{display:block;color:var(--label2);font-size:13px;line-height:1.3}
+.row .val{color:var(--label2);font-size:17px}
+.row.tap:active{background:var(--sunk)}
+.row .chev{color:var(--label3);width:10px;height:16px;flex:none}
+
+/* buttons */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:50px;padding:12px 20px;border-radius:14px;font-weight:600;font-size:17px;background:var(--blue);color:var(--on-blue);transition:transform .08s,opacity .15s}
+.btn:active{transform:scale(.98);opacity:.85}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.btn.tint{background:var(--blue-soft);color:var(--blue)}
+.btn.plain{background:none;color:var(--blue);min-height:44px}
+.btn.danger{background:var(--red-soft);color:var(--red)}
+.btn.sm{min-height:36px;width:auto;padding:6px 14px;font-size:15px;border-radius:99px}
+.link{color:var(--blue);font-weight:600}
+.stack{display:grid;gap:10px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* hero */
+.hero{padding:26px 20px 20px;text-align:center}
+.mark{position:relative;width:112px;height:112px;margin:0 auto 14px}
+.mark img{width:100%;height:100%;border-radius:26px;display:block;box-shadow:0 8px 24px rgba(12,36,84,.25)}
+.mark::after{content:"";position:absolute;inset:-7px;border-radius:32px;border:2px solid transparent;transition:border-color .3s}
+.mark.busy::after{border-color:var(--blue);animation:pulse 1.1s infinite}
+.mark.ok::after{border-color:var(--green)}
+.mark.demo::after{border-color:var(--orange)}
+.hero h2{font-size:22px;font-weight:700}
+.hero p{color:var(--label2);margin:4px auto 18px;max-width:330px;font-size:15px}
+.banner{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:12px;background:var(--orange-soft);color:var(--orange-text);font-size:14px;font-weight:500;margin-bottom:12px}
+.banner.err{background:var(--red-soft);color:var(--red)}
+.banner svg{flex:none;margin-top:1px}
+
+/* vitals */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px}
+.tile{background:var(--sunk);border-radius:12px;padding:12px 8px 10px;text-align:center;min-width:0}
+.tile .v{font:600 24px/1.1 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.tile .u{font-size:12px;color:var(--label3);margin-top:2px;height:14px}
+.tile .l{font-size:12px;font-weight:600;color:var(--label2);margin-top:4px}
+.tile.warn .v{color:var(--orange-text)} .tile.crit .v{color:var(--red)}
+.chartbox{padding:4px 12px 14px}
+.chartbox canvas{width:100%;height:120px;display:block}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--label2);margin-top:6px}
+.legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.vgrid{display:grid;grid-template-columns:1fr 1fr}
+.vgrid>div{padding:12px 16px;border-top:.5px solid var(--sep)}
+.vgrid>div:nth-child(odd){border-right:.5px solid var(--sep)}
+.vgrid span{display:block;font-size:12px;color:var(--label2);font-weight:500}
+.vgrid b{font-weight:600;font-size:16px;overflow-wrap:anywhere}
+
+/* lists */
+.badge{font-size:12px;font-weight:700;padding:3px 9px;border-radius:99px;flex:none;letter-spacing:.3px}
+.badge.high{background:var(--red-soft);color:var(--red)} .badge.medium{background:var(--orange-soft);color:var(--orange-text)} .badge.low{background:var(--yellow-soft);color:var(--yellow)}
+.code{font:700 16px var(--mono);color:var(--blue);min-width:62px}
+.empty{padding:34px 20px;text-align:center;color:var(--label2);font-size:15px}
+.empty svg{display:block;margin:0 auto 10px;color:var(--label3)}
+.empty .btn.sm{display:inline-flex}
+.empty b{display:block;color:var(--label);font-size:17px;margin-bottom:4px}
+
+/* chat */
+.chat{display:grid;gap:10px;padding:14px}
+.msg{max-width:88%;padding:10px 14px;border-radius:18px;font-size:16px;line-height:1.4;overflow-wrap:anywhere}
+.msg.u{justify-self:end;background:var(--blue);color:var(--on-blue);border-bottom-right-radius:6px}
+.msg.a{justify-self:start;background:var(--sunk);border-bottom-left-radius:6px}
+.msg p+p,.msg ul+p,.msg p+ul{margin-top:8px} .msg ul{padding-left:20px} .msg li{margin:2px 0}
+.msg code{font-family:var(--mono);font-size:14px;background:var(--blue-soft);padding:1px 5px;border-radius:5px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 12px}
+.composer{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;border-top:.5px solid var(--sep)}
+.composer textarea{flex:1;resize:none;border:0;background:var(--sunk);border-radius:20px;padding:10px 14px;max-height:120px;min-height:40px;outline-offset:0}
+.send{width:40px;height:40px;border-radius:50%;background:var(--blue);color:var(--on-blue);display:grid;place-items:center;flex:none}
+.send[disabled]{opacity:.35}
+.dots span{display:inline-block;width:7px;height:7px;margin:0 2px;border-radius:50%;background:var(--label3);animation:pulse 1s infinite}
+.dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
+
+/* forms */
+.field{display:flex;align-items:center;gap:10px}
+.field input,.field select{flex:1;min-width:0;border:0;background:transparent;font-size:17px;text-align:right;outline-offset:6px}
+.field label{flex:none;color:var(--label)}
+.input{width:100%;border:0;background:var(--sunk);border-radius:10px;padding:11px 12px;font-size:17px}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--sunk);padding:2px;border-radius:9px;width:100%}
+.seg button{padding:7px 6px;border-radius:7px;font-size:14px;font-weight:600;color:var(--label)}
+.seg button[aria-pressed="true"]{background:var(--elev);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+[data-theme="midnight"] .seg button[aria-pressed="true"]{background:#1B3369}
+
+/* tab bar */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:center;
+  padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border-top:.5px solid var(--sep)}
+.tabbar>div{display:flex;width:100%;max-width:640px}
+.tab{flex:1;height:var(--tab-h);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10.5px;font-weight:600;color:var(--label3);position:relative}
+.tab svg{width:26px;height:26px}
+.tab[aria-selected="true"]{color:var(--blue)}
+.tab .dot{position:absolute;top:6px;left:calc(50% + 8px);min-width:16px;height:16px;border-radius:8px;background:var(--red);color:#fff;font-size:11px;line-height:16px;text-align:center;padding:0 4px}
+
+/* sheet */
+.sheet-bg{position:fixed;inset:0;z-index:50;background:rgba(0,10,30,.45);display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s}
+.sheet-bg.open{opacity:1;pointer-events:auto}
+.sheet{width:100%;max-width:640px;max-height:88dvh;background:var(--bg);border-radius:20px 20px 0 0;display:flex;flex-direction:column;transform:translateY(100%);transition:transform .3s cubic-bezier(.2,.8,.2,1);padding-bottom:env(safe-area-inset-bottom)}
+.sheet-bg.open .sheet{transform:none}
+.grab{width:36px;height:5px;border-radius:3px;background:var(--label3);opacity:.5;margin:8px auto 0}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px 6px}
+.sheet-head h2{font-size:17px;font-weight:700}
+.sheet-body{overflow:auto;padding:6px 16px 18px;-webkit-overflow-scrolling:touch}
+.toast{position:fixed;top:calc(env(safe-area-inset-top) + 10px);left:50%;transform:translate(-50%,-200%);opacity:0;pointer-events:none;z-index:80;max-width:min(92vw,520px);padding:12px 18px;border-radius:99px;
+  background:var(--bar);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);box-shadow:0 6px 24px rgba(0,0,0,.2);font-size:15px;font-weight:500;text-align:center;transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .2s}
+.toast.on{transform:translate(-50%,0);opacity:1}
+.toast.err{color:var(--red)} .toast.ok{color:var(--green)}
+.foot-legal{text-align:center;font-size:12px;color:var(--label3);margin:26px 16px 0}
+.foot-legal a{color:inherit}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (min-width:700px){.tiles{grid-template-columns:repeat(6,1fr)}}
+</style>
+</head>
+<body>
+<noscript><p style="padding:24px">LazScan needs JavaScript.</p></noscript>
+<div class="navbar" id="navbar" aria-hidden="true"><b id="navTitle">LazScan</b></div>
+
+<main>
+<!-- ============ SCAN ============ -->
+<section class="page" id="p-scan" role="tabpanel" aria-labelledby="t-scan">
+ <div class="wrap">
+  <div class="top"><h1 class="large">LazScan</h1><span class="chip" id="statusChip"><i></i><span id="statusText">Not connected</span></span></div>
+  <div id="scanBanner"></div>
+
+  <div class="card hero">
+    <div class="mark" id="mark"><img src="./icon-192.png" alt=""></div>
+    <h2 id="heroTitle">Connect your adapter</h2>
+    <p id="heroSub">Plug a Bluetooth LE OBD-II adapter into the car and turn the ignition on.</p>
+    <div class="stack">
+      <button class="btn" id="btnConnect">Connect Adapter</button>
+      <button class="btn plain" id="btnDemo">Try Demo Mode</button>
+    </div>
+  </div>
+
+  <div id="liveArea" hidden>
+    <div class="sect">Vehicle</div>
+    <div class="card">
+      <div class="vgrid" style="margin-top:-1px">
+        <div style="border-top:0"><span>Vehicle</span><b id="v-name">--</b></div>
+        <div style="border-top:0"><span>Engine</span><b id="v-engine">--</b></div>
+        <div><span>VIN</span><b class="mono" id="v-vin" style="font-size:14px">--</b></div>
+        <div><span>Check-engine light</span><b id="v-mil">--</b></div>
+      </div>
+    </div>
+
+    <div class="sect">Live data</div>
+    <div class="card">
+      <div class="tiles" id="tiles"></div>
+      <div class="chartbox">
+        <canvas id="chart" role="img" aria-label="Recent engine speed and vehicle speed"></canvas>
+        <div class="legend"><span><i style="background:var(--blue)"></i>RPM</span><span><i style="background:var(--orange)"></i>Speed</span></div>
+      </div>
+    </div>
+    <div class="stack" style="margin-top:12px">
+      <button class="btn tint" id="btnReadCodes">Read Fault Codes</button>
+      <button class="btn plain" id="btnDisconnect">Disconnect</button>
+    </div>
+  </div>
+ </div>
+</section>
+
+<!-- ============ CODES ============ -->
+<section class="page" id="p-codes" role="tabpanel" aria-labelledby="t-codes" hidden>
+ <div class="wrap">
+  <div class="top"><h1 class="large">Codes</h1><span class="chip" id="milChip"><i></i><span>No data</span></span></div>
+  <div id="codesBody"></div>
+  <div class="stack" style="margin-top:16px">
+    <button class="btn" id="btnRead2">Read Fault Codes</button>
+    <button class="btn danger" id="btnClear">Clear Codes…</button>
+  </div>
+  <p class="foot">Clearing codes turns off the check-engine light and resets readiness monitors. It does not fix the fault, and the code returns if the problem is still there.</p>
+ </div>
+</section>
+
+<!-- ============ AI ============ -->
+<section class="page" id="p-ai" role="tabpanel" aria-labelledby="t-ai" hidden>
+ <div class="wrap">
+  <div class="top"><h1 class="large">LazAI</h1><button class="btn sm tint" id="btnNewChat">New chat</button></div>
+  <div class="card" id="aiCard">
+    <div id="aiEmpty"></div>
+    <div class="chat" id="chat" aria-live="polite"></div>
+    <div class="chips" id="chips"></div>
+    <form class="composer" id="composer">
+      <label class="sr" for="aiInput">Ask LazAI</label>
+      <textarea id="aiInput" rows="1" placeholder="Ask LazAI about your car…"></textarea>
+      <button class="send" id="aiSend" type="submit" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+    </form>
+  </div>
+  <p class="foot">LazAI can be wrong. Check torque specs, safety steps and part numbers against a repair manual before working on your car.</p>
+ </div>
+</section>
+
+<!-- ============ GARAGE ============ -->
+<section class="page" id="p-garage" role="tabpanel" aria-labelledby="t-garage" hidden>
+ <div class="wrap">
+  <div class="top"><h1 class="large">Garage</h1></div>
+  <div class="sect" style="margin-top:6px">Vehicle</div>
+  <div class="card">
+    <div class="row"><div class="grow"><b id="g-name">No vehicle yet</b><small id="g-sub">Connect an adapter or enter a VIN.</small></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="vinInput">VIN</label><input id="vinInput" class="mono" maxlength="17" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="17 characters"></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="yrInput">Year</label><input id="yrInput" inputmode="numeric" maxlength="4" placeholder="2008"></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="mkInput">Make</label><input id="mkInput" autocapitalize="characters" placeholder="HUMMER"></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="mdInput">Model</label><input id="mdInput" autocapitalize="characters" placeholder="H3"></div></div>
+  </div>
+  <div class="two" style="margin-top:10px">
+    <button class="btn tint" id="btnDecode">Decode VIN</button>
+    <button class="btn" id="btnRecalls">Check Recalls</button>
+  </div>
+
+  <div class="sect-row"><div class="sect">Recalls</div><span class="foot" style="margin:0" id="recallCount"></span></div>
+  <div class="card" id="recallList"><div class="empty"><b>No recall check yet</b>Uses the public NHTSA database.</div></div>
+  <p class="foot" id="complaintLine"></p>
+
+  <div class="sect-row"><div class="sect">Component tags</div></div>
+  <div class="card" id="tagList"></div>
+  <div class="two" style="margin-top:10px">
+    <button class="btn tint" id="btnTagRead">Read Tag</button>
+    <button class="btn tint" id="btnTagWrite">Write Tag</button>
+  </div>
+  <p class="foot">NFC tags need Android with Chrome. Each tag stores a part name, part number and install date.</p>
+ </div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section class="page" id="p-settings" role="tabpanel" aria-labelledby="t-settings" hidden>
+ <div class="wrap">
+  <div class="top"><h1 class="large">Settings</h1></div>
+
+  <div class="sect" style="margin-top:6px">LazAI (Groq)</div>
+  <div class="card">
+    <div class="row"><div class="field" style="width:100%"><label for="keyInput">API key</label><input id="keyInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="gsk_…"></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="modelSel">Model</label><select id="modelSel"></select></div></div>
+  </div>
+  <div class="two" style="margin-top:10px">
+    <button class="btn tint" id="btnSaveKey">Save Key</button>
+    <button class="btn tint" id="btnRefreshModels">Refresh Models</button>
+  </div>
+  <p class="foot" id="modelStatus">Get a free key at console.groq.com. It stays in this browser and is only sent to api.groq.com.</p>
+
+  <div class="sect">Appearance</div>
+  <div class="card pad stack">
+    <div class="seg" id="themeSeg" role="group" aria-label="Theme">
+      <button data-v="garage" aria-pressed="true">Garage Day</button><button data-v="midnight" aria-pressed="false">Midnight</button><button data-v="auto" aria-pressed="false">Auto</button>
+    </div>
+    <div class="seg" id="unitSeg" role="group" aria-label="Units">
+      <button data-v="imperial" aria-pressed="true">mph · °F</button><button data-v="metric" aria-pressed="false">km/h · °C</button>
+    </div>
+  </div>
+
+  <div class="sect">Tools</div>
+  <div class="card">
+    <button class="row tap" id="rowReport"><div class="grow">Diagnostic report<small>Save or print a PDF of codes and live data</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowNotes"><div class="grow">Dev notes<small>Ideas, bugs and feature requests</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowProbe"><div class="grow">Tesla CAN probe (beta)<small>Test whether your adapter can listen to a Tesla's battery bus. Read-only.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowInstall" hidden><div class="grow">Install app<small>Add LazScan to your home screen</small></div></button>
+  </div>
+
+  <div class="sect">About</div>
+  <div class="card">
+    <div class="row"><div class="grow">Version</div><span class="val mono" id="verText"></span></div>
+    <div class="row"><div class="grow">Adapter</div><span class="val" id="adapterText">None</span></div>
+    <div class="row"><div class="grow">Protocol</div><span class="val" id="protoText">--</span></div>
+  </div>
+  <div style="margin-top:12px"><button class="btn danger" id="btnClearAll">Erase All Data…</button></div>
+  <p class="foot-legal">© 2026 LAZLAB Creations. All Rights Reserved.<br><a href="mailto:lazlab.io@gmail.com">lazlab.io@gmail.com</a></p>
+ </div>
+</section>
+</main>
+
+<div class="tabbar"><div role="tablist" aria-label="Sections">
+  <button class="tab" role="tab" id="t-scan" data-tab="scan" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/><circle cx="12" cy="16" r="1.2" fill="currentColor"/></svg>Scan</button>
+  <button class="tab" role="tab" id="t-codes" data-tab="codes" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9.5 16h-19z"/><path d="M12 10v4.5M12 17.4v.1"/></svg>Codes<span class="dot" id="codeDot" hidden></span></button>
+  <button class="tab" role="tab" id="t-ai" data-tab="ai" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>LazAI</button>
+  <button class="tab" role="tab" id="t-garage" data-tab="garage" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 15.5l1.6-5a2 2 0 0 1 1.9-1.4h8a2 2 0 0 1 1.9 1.4l1.6 5"/><rect x="3" y="15.5" width="18" height="4" rx="1.5"/><path d="M6.5 19.5v1.5M17.5 19.5v1.5"/></svg>Garage</button>
+  <button class="tab" role="tab" id="t-settings" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/></svg>Settings</button>
+</div></div>
+
+<div class="sheet-bg" id="sheetBg"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="grab"></div>
+  <div class="sheet-head"><h2 id="sheetTitle"></h2><button class="link" id="sheetClose">Done</button></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+// ============================================================
+//  LazScan — app logic
+//  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
+// ============================================================
+const VERSION = 'v2.1.0'; // keep in sync with CACHE_NAME in sw.js
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lsGet = (k, d = null) => { try { const v = localStorage.getItem('lazscan_' + k); return v === null ? d : v; } catch (e) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem('lazscan_' + k, v); } catch (e) {} };
+const jsGet = (k, d) => { try { return JSON.parse(lsGet(k, 'null')) ?? d; } catch (e) { return d; } };
+const jsSet = (k, v) => lsSet(k, JSON.stringify(v));
+
+// ============================================================
+//  OBD-II DATA TABLES
+// ============================================================
+const DTC_TABLE = {
+  P0011:['Intake cam timing over-advanced (bank 1)','Valvetrain','medium'],P0012:['Intake cam timing over-retarded (bank 1)','Valvetrain','medium'],
+  P0016:['Crankshaft / camshaft position correlation (bank 1)','Valvetrain','high'],
+  P0100:['Mass airflow (MAF) circuit','Fuel & air','medium'],P0101:['MAF range / performance','Fuel & air','medium'],P0102:['MAF circuit low','Fuel & air','medium'],P0103:['MAF circuit high','Fuel & air','medium'],P0104:['MAF circuit intermittent','Fuel & air','medium'],
+  P0106:['MAP sensor range / performance','Fuel & air','medium'],P0107:['MAP sensor circuit low','Fuel & air','medium'],P0108:['MAP sensor circuit high','Fuel & air','medium'],
+  P0110:['Intake air temp circuit','Fuel & air','low'],P0112:['Intake air temp circuit low','Fuel & air','low'],P0113:['Intake air temp circuit high','Fuel & air','low'],
+  P0115:['Coolant temp circuit','Cooling','medium'],P0116:['Coolant temp range / performance','Cooling','medium'],P0117:['Coolant temp circuit low','Cooling','medium'],P0118:['Coolant temp circuit high','Cooling','medium'],
+  P0120:['Throttle position sensor A circuit','Fuel & air','high'],P0121:['Throttle position sensor A range','Fuel & air','high'],P0122:['Throttle position sensor A low','Fuel & air','high'],P0123:['Throttle position sensor A high','Fuel & air','high'],
+  P0125:['Coolant too cool for closed-loop fuel control','Cooling','low'],P0128:['Coolant below thermostat regulating temperature','Cooling','low'],
+  P0130:['O2 sensor circuit (bank 1 sensor 1)','Emissions','medium'],P0131:['O2 sensor low voltage (B1S1)','Emissions','medium'],P0132:['O2 sensor high voltage (B1S1)','Emissions','medium'],P0133:['O2 sensor slow response (B1S1)','Emissions','medium'],P0134:['O2 sensor no activity (B1S1)','Emissions','medium'],P0135:['O2 sensor heater circuit (B1S1)','Emissions','medium'],
+  P0136:['O2 sensor circuit (bank 1 sensor 2)','Emissions','low'],P0137:['O2 sensor low voltage (B1S2)','Emissions','low'],P0138:['O2 sensor high voltage (B1S2)','Emissions','low'],P0139:['O2 sensor slow response (B1S2)','Emissions','low'],P0141:['O2 sensor heater circuit (B1S2)','Emissions','low'],
+  P0150:['O2 sensor circuit (bank 2 sensor 1)','Emissions','medium'],P0151:['O2 sensor low voltage (B2S1)','Emissions','medium'],P0152:['O2 sensor high voltage (B2S1)','Emissions','medium'],P0153:['O2 sensor slow response (B2S1)','Emissions','medium'],P0155:['O2 sensor heater circuit (B2S1)','Emissions','medium'],
+  P0171:['System too lean (bank 1)','Fuel & air','medium'],P0172:['System too rich (bank 1)','Fuel & air','medium'],P0174:['System too lean (bank 2)','Fuel & air','medium'],P0175:['System too rich (bank 2)','Fuel & air','medium'],
+  P0201:['Injector circuit, cylinder 1','Fuel & air','high'],P0202:['Injector circuit, cylinder 2','Fuel & air','high'],P0203:['Injector circuit, cylinder 3','Fuel & air','high'],P0204:['Injector circuit, cylinder 4','Fuel & air','high'],P0205:['Injector circuit, cylinder 5','Fuel & air','high'],P0206:['Injector circuit, cylinder 6','Fuel & air','high'],P0207:['Injector circuit, cylinder 7','Fuel & air','high'],P0208:['Injector circuit, cylinder 8','Fuel & air','high'],
+  P0217:['Engine overtemperature','Cooling','high'],P0220:['Throttle position sensor B circuit','Fuel & air','high'],P0230:['Fuel pump primary circuit','Fuel & air','high'],
+  P0300:['Random / multiple cylinder misfire','Ignition','high'],P0301:['Cylinder 1 misfire','Ignition','high'],P0302:['Cylinder 2 misfire','Ignition','high'],P0303:['Cylinder 3 misfire','Ignition','high'],P0304:['Cylinder 4 misfire','Ignition','high'],P0305:['Cylinder 5 misfire','Ignition','high'],P0306:['Cylinder 6 misfire','Ignition','high'],P0307:['Cylinder 7 misfire','Ignition','high'],P0308:['Cylinder 8 misfire','Ignition','high'],
+  P0325:['Knock sensor 1 circuit (bank 1)','Ignition','medium'],P0335:['Crankshaft position sensor A circuit','Ignition','high'],P0336:['Crankshaft position sensor A range','Ignition','high'],P0340:['Camshaft position sensor circuit (bank 1)','Ignition','high'],P0341:['Camshaft position sensor range (bank 1)','Ignition','high'],
+  P0351:['Ignition coil A circuit','Ignition','high'],P0352:['Ignition coil B circuit','Ignition','high'],P0353:['Ignition coil C circuit','Ignition','high'],P0354:['Ignition coil D circuit','Ignition','high'],P0355:['Ignition coil E circuit','Ignition','high'],P0356:['Ignition coil F circuit','Ignition','high'],
+  P0401:['EGR flow insufficient','Emissions','medium'],P0402:['EGR flow excessive','Emissions','medium'],P0403:['EGR circuit','Emissions','medium'],P0404:['EGR range / performance','Emissions','medium'],
+  P0420:['Catalyst efficiency below threshold (bank 1)','Emissions','medium'],P0430:['Catalyst efficiency below threshold (bank 2)','Emissions','medium'],
+  P0440:['EVAP system','Emissions','low'],P0441:['EVAP incorrect purge flow','Emissions','low'],P0442:['EVAP small leak','Emissions','low'],P0443:['EVAP purge valve circuit','Emissions','low'],P0446:['EVAP vent control circuit','Emissions','low'],P0455:['EVAP large leak (check the fuel cap)','Emissions','low'],P0456:['EVAP very small leak','Emissions','low'],P0457:['EVAP leak (fuel cap loose or missing)','Emissions','low'],P0460:['Fuel level sensor circuit','Fuel & air','low'],
+  P0500:['Vehicle speed sensor','Speed & idle','medium'],P0505:['Idle control system','Speed & idle','medium'],P0506:['Idle speed lower than expected','Speed & idle','medium'],P0507:['Idle speed higher than expected','Speed & idle','medium'],
+  P0562:['System voltage low','Electrical','medium'],P0563:['System voltage high','Electrical','medium'],P0571:['Brake switch circuit','Speed & idle','medium'],
+  P0600:['Serial communication link','Computer','high'],P0601:['ECM memory checksum error','Computer','high'],P0602:['ECM programming error','Computer','high'],P0606:['ECM processor fault','Computer','high'],
+  P0700:['Transmission control system','Transmission','high'],P0705:['Transmission range sensor circuit','Transmission','high'],P0715:['Input / turbine speed sensor circuit','Transmission','high'],P0720:['Output speed sensor circuit','Transmission','high'],P0730:['Incorrect gear ratio','Transmission','high'],P0740:['Torque converter clutch circuit','Transmission','high'],P0741:['Torque converter clutch performance','Transmission','high'],P0750:['Shift solenoid A','Transmission','high'],P0755:['Shift solenoid B','Transmission','high'],
+  P2096:['Post-catalyst fuel trim too lean (bank 1)','Emissions','medium'],P2097:['Post-catalyst fuel trim too rich (bank 1)','Emissions','medium'],
+  U0100:['Lost communication with ECM / PCM','Network','high'],U0101:['Lost communication with TCM','Network','high'],U0121:['Lost communication with ABS module','Network','high'],U0140:['Lost communication with body control module','Network','medium']
+};
+function describeDTC(code) {
+  const t = DTC_TABLE[code];
+  if (t) return { code, desc: t[0], sys: t[1], sev: t[2], known: true };
+  const L = code[0], n = +code[1];
+  let sys = { P: 'Powertrain', B: 'Body', C: 'Chassis', U: 'Network' }[L] || 'Unknown';
+  const mfr = n === 1 || n === 3;
+  return { code, desc: mfr ? 'Manufacturer-specific code. Look it up for your make and model, or ask LazAI.' : 'Generic code with no built-in description. Ask LazAI.', sys, sev: 'medium', known: false };
+}
+
+// units + gauge definitions (raw values are always metric)
+const imperial = () => (lsGet('units', 'imperial') === 'imperial');
+const GAUGES = [
+  { id: 'rpm', pid: '0C', label: 'RPM', unit: () => 'rpm', dec: (b) => b.length > 1 ? (b[0] * 256 + b[1]) / 4 : null, fmt: (v) => Math.round(v) },
+  { id: 'speed', pid: '0D', label: 'Speed', unit: () => imperial() ? 'mph' : 'km/h', dec: (b) => b[0], fmt: (v) => Math.round(imperial() ? v * 0.621371 : v) },
+  { id: 'coolant', pid: '05', label: 'Coolant', unit: () => imperial() ? '°F' : '°C', dec: (b) => b[0] - 40, fmt: (v) => Math.round(imperial() ? v * 9 / 5 + 32 : v), warn: (v) => v >= 112 ? 'crit' : v >= 104 ? 'warn' : '' },
+  { id: 'load', pid: '04', label: 'Engine load', unit: () => '%', dec: (b) => b[0] * 100 / 255, fmt: (v) => Math.round(v) },
+  { id: 'trim', pid: '06', label: 'Fuel trim', unit: () => '%', dec: (b) => (b[0] - 128) * 100 / 128, fmt: (v) => (v > 0 ? '+' : '') + v.toFixed(1), warn: (v) => Math.abs(v) >= 15 ? 'warn' : '' },
+  { id: 'volt', pid: '42', label: 'Battery', unit: () => 'V', dec: (b) => b.length > 1 ? (b[0] * 256 + b[1]) / 1000 : null, fmt: (v) => v.toFixed(1), warn: (v) => v < 11.8 ? 'crit' : v < 12.4 ? 'warn' : '' }
+];
+const PID_NAMES = { '05': 'coolant', '04': 'load', '06': 'trim', '0C': 'rpm', '0D': 'speed', '42': 'volt' };
+
+// ============================================================
+//  ELM327 LINK  (transport-agnostic: BLE or the demo mock)
+// ============================================================
+class ElmLink {
+  constructor(transport) {
+    this.t = transport; this.buf = ''; this.pending = null; this.queue = Promise.resolve();
+    transport.onData = (txt) => this._onData(txt);
+  }
+  _onData(txt) {
+    this.buf += txt;
+    const i = this.buf.indexOf('>');
+    if (i === -1) return;
+    const raw = this.buf.slice(0, i); this.buf = this.buf.slice(i + 1);
+    const p = this.pending;
+    if (p) { this.pending = null; clearTimeout(p.timer); p.resolve(raw); }
+  }
+  // Sends one command, resolves with the cleaned list of response lines.
+  send(cmd, timeout = 4000) {
+    const run = () => new Promise((resolve, reject) => {
+      this.buf = '';
+      const timer = setTimeout(() => { this.pending = null; reject(new Error('timeout:' + cmd)); }, timeout);
+      this.pending = { resolve, timer };
+      this.t.write(cmd + '\r').catch((e) => { clearTimeout(timer); this.pending = null; reject(e); });
+    }).then((raw) => cleanLines(raw, cmd));
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => {});
+    return p;
+  }
+  close() { try { this.t.close(); } catch (e) {} }
+}
+function cleanLines(raw, cmd) {
+  return String(raw).split(/[\r\n]+/).map((l) => l.trim().toUpperCase()).filter((l) => l && l !== cmd.toUpperCase() && !/^SEARCHING/.test(l) && !/^BUS INIT/.test(l));
+}
+const ERR_RE = /(NODATA|UNABLETOCONNECT|CANERROR|BUSERROR|BUSBUSY|FBERROR|DATAERROR|STOPPED|ACTALERT|BUFFERFULL|^\?$)/;
+const hexOf = (l) => l.replace(/\s/g, '');
+const isErr = (lines) => lines.length === 0 || lines.every((l) => ERR_RE.test(hexOf(l)));
+const hexBytes = (h) => (h.match(/.{2}/g) || []).map((x) => parseInt(x, 16));
+
+// Mode 01: returns data bytes for a PID, or null.
+function parseMode01(lines, pid) {
+  const want = '41' + pid;
+  for (const l of lines) {
+    const h = hexOf(l);
+    if (h.startsWith(want) && /^[0-9A-F]+$/.test(h)) return hexBytes(h.slice(want.length));
+  }
+  return null;
+}
+// Assemble response "messages" from single- or multi-frame answers (headers off).
+function assembleMessages(lines, resp) {
+  const msgs = []; let cur = null;
+  for (const raw of lines) {
+    let l = hexOf(raw);
+    if (!l || ERR_RE.test(l) || /^[0-9A-F]{3}$/.test(l)) continue; // length line of a multi-frame reply
+    const m = l.match(/^([0-9A-F]):([0-9A-F]*)$/);
+    if (m) { if (m[1] === '0') { cur = { data: m[2] }; msgs.push(cur); } else if (cur) cur.data += m[2]; continue; }
+    if (l.startsWith(resp) && /^[0-9A-F]+$/.test(l)) { cur = { data: l }; msgs.push(cur); }
+  }
+  return msgs;
+}
+// Modes 03 / 07 / 0A
+function parseDTCs(lines, mode, can) {
+  const resp = (parseInt(mode, 16) + 0x40).toString(16).toUpperCase().padStart(2, '0');
+  const out = [];
+  for (const msg of assembleMessages(lines, resp)) {
+    if (!msg.data.startsWith(resp)) continue;
+    let d = msg.data.slice(2);
+    if (can) d = d.slice(2); // CAN replies carry a DTC count byte
+    for (let i = 0; i + 4 <= d.length; i += 4) {
+      const pair = d.slice(i, i + 4);
+      if (pair === '0000') continue;
+      const v = parseInt(pair, 16);
+      const code = 'PCBU'[v >> 14] + ((v >> 12) & 3) + ((v >> 8) & 15).toString(16).toUpperCase() + (v & 255).toString(16).toUpperCase().padStart(2, '0');
+      if (!out.includes(code)) out.push(code);
+    }
+  }
+  return out;
+}
+// Mode 09 PID 02
+function parseVIN(lines) {
+  let hex = '';
+  for (const msg of assembleMessages(lines, '4902')) {
+    if (msg.data.startsWith('4902')) hex += msg.data.slice(6); // 49 02 <seq>
+  }
+  const chars = hexBytes(hex).filter((b) => b >= 0x30 && b <= 0x5A).map((b) => String.fromCharCode(b)).join('');
+  const vin = chars.slice(-17);
+  return /^[A-HJ-NPR-Z0-9]{17}$/.test(vin) ? vin : null;
+}
+// Mode 01 supported-PID bitmaps
+function parseSupported(bytes, base) {
+  const out = [];
+  for (let i = 0; i < 32; i++) if (bytes[Math.floor(i / 8)] & (0x80 >> (i % 8))) out.push(base + i + 1);
+  return out;
+}
+const hex2 = (n) => n.toString(16).toUpperCase().padStart(2, '0');
+
+async function initElm(link) {
+  const info = { adapter: '', protocol: '', can: true, supported: new Set() };
+  try { const z = await link.send('ATZ', 3500); info.adapter = (z.find((l) => /ELM|OBD|STN|V\d/.test(l)) || '').replace(/^.*?(ELM|STN)/, '$1').replace(/ V(\d)/, ' v$1'); } catch (e) { /* some clones answer late; carry on */ }
+  for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP0']) { try { await link.send(c, 2500); } catch (e) {} }
+  if (!info.adapter) { try { info.adapter = (await link.send('ATI', 2500))[0] || ''; } catch (e) {} }
+  let first;
+  try { first = await link.send('0100', 15000); } catch (e) { throw Object.assign(new Error('no-answer'), { code: 'NO_ANSWER' }); }
+  if (isErr(first) || !parseMode01(first, '00')) throw Object.assign(new Error('ecu'), { code: 'NO_ECU', detail: first.join(' ') });
+  try { const p = await link.send('ATDPN', 2500); const c = (p[0] || '').replace(/^A/, ''); info.can = '6789ABC'.includes(c[0] || '6'); } catch (e) {}
+  try { const p = await link.send('ATDP', 2500); info.protocol = (p[0] || '').replace(/^AUTO,\s*/i, ''); } catch (e) {}
+  // supported PIDs
+  let bytes = parseMode01(first, '00');
+  for (const base of [0x00, 0x20, 0x40, 0x60]) {
+    if (base > 0) { try { const r = await link.send('01' + hex2(base), 5000); bytes = parseMode01(r, hex2(base)); } catch (e) { bytes = null; } }
+    if (!bytes || bytes.length < 4) break;
+    parseSupported(bytes, base).forEach((p) => info.supported.add(hex2(p)));
+    if (!(bytes[3] & 1)) break; // no further range
+  }
+  return info;
+}
+
+// ============================================================
+//  TRANSPORTS
+// ============================================================
+const BLE_SERVICES = [
+  '0000fff0-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb', '000018f0-0000-1000-8000-00805f9b34fb',
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000ae00-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455'
+];
+const short = (u) => (u || '').replace(/^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i, '$1').toLowerCase();
+const stepErr = (step, e, extra) => Object.assign(e instanceof Error ? e : new Error(String(e)), { step, diag: extra || '' });
+class BleTransport {
+  constructor() { this.onData = () => {}; this.onClose = () => {}; this.dev = null; this.w = null; this.enc = new TextEncoder(); this.dec = new TextDecoder(); this.diag = ''; }
+  async connect() {
+    // Short UUID strings like 'fff0' are rejected by Web Bluetooth, so full 128-bit UUIDs are used.
+    this.dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
+    this.dev.addEventListener('gattserverdisconnected', () => this.onClose());
+    this.name = this.dev.name || 'BLE adapter';
+    // 1) GATT connect, with retries (Android often needs a second try right after the chooser closes)
+    let server, lastErr;
+    for (let i = 0; i < 3 && !server; i++) {
+      try { server = await this.dev.gatt.connect(); } catch (e) { lastErr = e; await sleep(500 * (i + 1)); }
+    }
+    if (!server) throw stepErr('gatt-connect', lastErr);
+    await sleep(500); // let Android finish service discovery before touching characteristics
+    // 2) Discover every service/characteristic and rank the possible serial pairs
+    let services = [];
+    for (let i = 0; i < 3 && !services.length; i++) {
+      try { services = await server.getPrimaryServices(); } catch (e) { lastErr = e; }
+      if (!services.length) await sleep(400);
+    }
+    const cands = [], map = [];
+    for (const svc of services) {
+      let chars = [];
+      try { chars = await svc.getCharacteristics(); } catch (e) { map.push(short(svc.uuid) + ':err'); continue; }
+      const flag = (c) => ['notify', 'indicate', 'write', 'writeWithoutResponse', 'read'].filter((k) => c.properties[k]).map((k) => ({ notify: 'N', indicate: 'I', write: 'W', writeWithoutResponse: 'w', read: 'R' }[k])).join('');
+      map.push(short(svc.uuid) + '[' + chars.map((c) => short(c.uuid) + '=' + flag(c)).join(',') + ']');
+      const notifiers = chars.filter((c) => c.properties.notify || c.properties.indicate);
+      const writers = chars.filter((c) => c.properties.write || c.properties.writeWithoutResponse);
+      for (const n of notifiers) for (const w of writers) {
+        let score = 0;
+        const sid = short(svc.uuid);
+        if (sid === 'fff0' && short(n.uuid) === 'fff1' && short(w.uuid) === 'fff2') score += 100; // Veepeak / most ELM327 BLE clones
+        if (sid === 'ffe0' && n === w) score += 90;
+        if (sid === 'fff0') score += 40;
+        if (sid === 'ffe0') score += 35;
+        if (n.properties.notify) score += 5;
+        if (n === w) score += 2;
+        if (w.properties.writeWithoutResponse) score += 3;
+        cands.push({ svc, n, w, score });
+      }
+    }
+    this.diag = map.join(' ');
+    if (!cands.length) throw Object.assign(new Error('no-serial'), { code: 'NO_SERIAL', diag: this.diag });
+    cands.sort((a, b) => b.score - a.score);
+    // 3) Try each pair until notifications can actually be enabled
+    const errs = [];
+    for (const c of cands) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await c.n.startNotifications();
+          this.handler = (ev) => this.onData(this.dec.decode(ev.target.value));
+          c.n.addEventListener('characteristicvaluechanged', this.handler);
+          this.w = c.w; this.n = c.n; this.used = short(c.svc.uuid) + '/' + short(c.n.uuid) + '/' + short(c.w.uuid);
+          await sleep(300);
+          return;
+        } catch (e) { errs.push(short(c.n.uuid) + ':' + (e.name || '') + ' ' + (e.message || '')); await sleep(300); }
+      }
+    }
+    throw stepErr('notify', new Error(errs[errs.length - 1] || 'could not enable notifications'), this.diag);
+  }
+  async write(str) {
+    const data = this.enc.encode(str);
+    for (let i = 0; i < data.length; i += 20) {
+      const part = data.slice(i, i + 20);
+      const p = this.w.properties;
+      const order = p.writeWithoutResponse && this.w.writeValueWithoutResponse ? ['nr', 'wr'] : ['wr', 'nr'];
+      let done = false, err;
+      for (const mode of order) {
+        if (mode === 'nr' && !(p.writeWithoutResponse && this.w.writeValueWithoutResponse)) continue;
+        if (mode === 'wr' && !p.write) continue;
+        try { if (mode === 'nr') await this.w.writeValueWithoutResponse(part); else await this.w.writeValue(part); done = true; break; } catch (e) { err = e; }
+      }
+      if (!done) throw err || new Error('write failed');
+    }
+  }
+  close() { try { if (this.n && this.handler) this.n.removeEventListener('characteristicvaluechanged', this.handler); } catch (e) {} try { if (this.dev && this.dev.gatt.connected) this.dev.gatt.disconnect(); } catch (e) {} }
+}
+
+// Demo adapter: behaves like an ELM327 so the same engine and parsers run end to end.
+const DEMO_VIN = '5GTDN13E488148321';
+const DEMO_VEHICLE = { vin: DEMO_VIN, year: '2008', make: 'HUMMER', model: 'H3', engine: '3.7L I5', trim: 'Adventure' };
+class MockTransport {
+  constructor() { this.onData = () => {}; this.onClose = () => {}; this.name = 'Demo adapter'; this.t0 = Date.now(); this.codes = ['P0300', 'P0104', 'P0128']; this.name = 'Demo adapter'; }
+  async connect() { await sleep(500); }
+  close() { this.closed = true; }
+  _mask(pids, base) {
+    const b = [0, 0, 0, 0];
+    for (const p of pids) { const n = parseInt(p, 16) - base - 1; if (n >= 0 && n < 32) b[n >> 3] |= 0x80 >> (n & 7); }
+    return b.map(hex2).join(' ');
+  }
+  _hexVin() { return [...DEMO_VIN].map((c) => hex2(c.charCodeAt(0))); }
+  _dtcBytes(codes) {
+    return codes.map((c) => { const v = ('PCBU'.indexOf(c[0]) << 14) | (parseInt(c[1], 10) << 12) | parseInt(c.slice(2), 16); return hex2(v >> 8) + ' ' + hex2(v & 255); }).join(' ');
+  }
+  _reply(cmd) {
+    const t = (Date.now() - this.t0) / 1000;
+    const rpm = Math.round(780 + 120 * Math.sin(t / 3) + 40 * Math.sin(t * 2)) * 4;
+    const sup1 = ['01','03','04','05','06','07','0C','0D','0F','11','1C','20'], sup2 = ['2F','40'], sup3 = ['42'];
+    if (cmd === 'ATZ') return 'ELM327 v1.5';
+    if (cmd === 'ATI') return 'ELM327 v1.5';
+    if (cmd === 'ATDPN') return 'A6';
+    if (cmd === 'ATDP') return 'AUTO, ISO 15765-4 (CAN 11/500)';
+    if (cmd.startsWith('AT')) return 'OK';
+    if (cmd === '0100') return 'SEARCHING...\r41 00 ' + this._mask(sup1, 0);
+    if (cmd === '0120') return '41 20 ' + this._mask(sup2, 0x20);
+    if (cmd === '0140') return '41 40 ' + this._mask(sup3, 0x40);
+    if (cmd === '0101') return '41 01 ' + hex2((this.codes.length ? 0x80 : 0) | this.codes.length) + ' 07 E5 00';
+    if (cmd === '010C') return '41 0C ' + hex2((rpm >> 8) & 255) + ' ' + hex2(rpm & 255);
+    if (cmd === '010D') return '41 0D 00';
+    if (cmd === '0105') return '41 05 ' + hex2(40 + Math.round(90 + 3 * Math.sin(t / 20)));
+    if (cmd === '0104') return '41 04 ' + hex2(Math.round(255 * (0.22 + 0.05 * Math.sin(t / 4))));
+    if (cmd === '0106') return '41 06 ' + hex2(128 + Math.round(5 + 2 * Math.sin(t / 5)));
+    if (cmd === '0142') { const mv = 14050 + Math.round(90 * Math.sin(t)); return '41 42 ' + hex2(mv >> 8) + ' ' + hex2(mv & 255); }
+    if (cmd === '0902') { const v = this._hexVin(); return '014\r0: 49 02 01 ' + v.slice(0, 3).join(' ') + '\r1: ' + v.slice(3, 10).join(' ') + '\r2: ' + v.slice(10, 17).join(' '); }
+    if (cmd === '03') {
+      if (!this.codes.length) return '43 00';
+      const d = this._dtcBytes(this.codes).split(' ');
+      return '00A\r0: 43 ' + hex2(this.codes.length) + ' ' + d.slice(0, 4).join(' ') + '\r1: ' + d.slice(4).concat(['00', '00', '00', '00', '00', '00', '00']).slice(0, 7).join(' ');
+    }
+    if (cmd === '07') return '47 00';
+    if (cmd === '0A') return '4A 00';
+    if (cmd === '04') { this.codes = []; return '44'; }
+    return 'NO DATA';
+  }
+  async write(str) {
+    const cmd = str.replace(/[\r\n]/g, '').toUpperCase().replace(/\s/g, '');
+    const out = this._reply(cmd) + '\r\r>';
+    const delay = cmd === 'ATZ' ? 450 : cmd === '0100' ? 700 : 35;
+    setTimeout(async () => { // deliver in 20-byte chunks like BLE notifications
+      for (let i = 0; i < out.length && !this.closed; i += 20) { this.onData(out.slice(i, i + 20)); await sleep(4); }
+    }, delay);
+  }
+}
+
+// ============================================================
+//  STATE
+// ============================================================
+const S = {
+  mode: 'idle',        // idle | connecting | connected | demo
+  link: null, transport: null, demo: false, polling: false, wake: null,
+  info: null, live: {}, hist: { rpm: [], speed: [] }, mil: null,
+  dtcs: { stored: [], pending: [], permanent: [] }, readOnce: false,
+  vehicle: jsGet('vehicle', {}), chat: [], busy: false, timeouts: 0,
+  models: jsGet('models', []), tags: jsGet('tags', []), recalls: null
+};
+const getKey = () => lsGet('groq_key', '');
+const getModel = () => lsGet('model', 'llama-3.3-70b-versatile');
+
+// ============================================================
+//  UI HELPERS
+// ============================================================
+let toastTimer;
+function toast(msg, kind = '') {
+  const t = $('toast'); t.textContent = msg; t.className = 'toast on ' + kind;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 3200);
+}
+let sheetReturn = null;
+function openSheet(title, node, onClose) {
+  $('sheetTitle').textContent = title;
+  const body = $('sheetBody'); body.innerHTML = ''; body.appendChild(node);
+  sheetReturn = document.activeElement; $('sheetBg').classList.add('open'); S.sheetOnClose = onClose;
+  setTimeout(() => $('sheetClose').focus(), 50);
+}
+function closeSheet() {
+  $('sheetBg').classList.remove('open');
+  if (sheetReturn && sheetReturn.focus) sheetReturn.focus();
+  const cb = S.sheetOnClose; S.sheetOnClose = null; if (cb) cb();
+}
+$('sheetClose').addEventListener('click', closeSheet);
+$('sheetBg').addEventListener('click', (e) => { if (e.target === $('sheetBg')) closeSheet(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('sheetBg').classList.contains('open')) closeSheet(); });
+function html(str) { const d = document.createElement('div'); d.innerHTML = str; return d; }
+function confirmSheet(title, msg, label, danger) {
+  return new Promise((resolve) => {
+    const n = html(`<p style="color:var(--label2);margin:4px 0 16px">${esc(msg)}</p><div class="stack"><button class="btn ${danger ? 'danger' : ''}" id="cOk">${esc(label)}</button><button class="btn plain" id="cNo">Cancel</button></div>`);
+    let done = false;
+    const fin = (v) => { if (done) return; done = true; closeSheet(); resolve(v); };
+    n.querySelector('#cOk').onclick = () => fin(true); n.querySelector('#cNo').onclick = () => fin(false);
+    openSheet(title, n, () => { if (!done) { done = true; resolve(false); } });
+  });
+}
+const I = {
+  warn: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9.5 16h-19z"/><path d="M12 10v4.5M12 17.4v.1"/></svg>',
+  check: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.6 2.6L16 9.5"/></svg>',
+  car: '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 15.5l1.6-5a2 2 0 0 1 1.9-1.4h8a2 2 0 0 1 1.9 1.4l1.6 5"/><rect x="3" y="15.5" width="18" height="4" rx="1.5"/></svg>',
+  chev: '<svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg>'
+};
+
+// ============================================================
+//  THEME / TABS
+// ============================================================
+function resolveTheme(t) { return t === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'garage') : t; }
+function applyTheme(t) {
+  const r = resolveTheme(t);
+  document.documentElement.setAttribute('data-theme', r);
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', bg);
+  document.querySelectorAll('#themeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === t)));
+  drawChart();
+}
+$('themeSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; lsSet('theme', b.dataset.v); applyTheme(b.dataset.v); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (lsGet('theme', 'garage') === 'auto') applyTheme('auto'); });
+$('unitSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return; lsSet('units', b.dataset.v);
+  document.querySelectorAll('#unitSeg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  renderTiles(); updateTiles();
+});
+
+const TITLES = { scan: 'LazScan', codes: 'Codes', ai: 'LazAI', garage: 'Garage', settings: 'Settings' };
+function setTab(name) {
+  document.querySelectorAll('.page').forEach((p) => { p.hidden = p.id !== 'p-' + name; });
+  document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+  $('navTitle').textContent = TITLES[name]; window.scrollTo(0, 0); onScroll();
+  if (name === 'scan') drawChart();
+  if (name === 'ai') renderAI();
+}
+document.querySelector('.tabbar').addEventListener('click', (e) => { const t = e.target.closest('.tab'); if (t) setTab(t.dataset.tab); });
+function onScroll() { $('navbar').classList.toggle('on', window.scrollY > 44); }
+window.addEventListener('scroll', onScroll, { passive: true });
+
+// ============================================================
+//  CONNECTION FLOW
+// ============================================================
+function setMode(mode, text) {
+  S.mode = mode;
+  const chip = $('statusChip'); const cls = { idle: '', connecting: 'busy', connected: 'ok', demo: 'demo' }[mode];
+  chip.className = 'chip ' + cls; $('statusText').textContent = text || { idle: 'Not connected', connecting: 'Connecting…', connected: 'Connected', demo: 'Demo' }[mode];
+  const mk = $('mark'); mk.className = 'mark ' + cls;
+  const live = mode === 'connected' || mode === 'demo';
+  $('liveArea').hidden = !live;
+  $('btnConnect').hidden = live; $('btnDemo').hidden = live;
+  const hero = $('p-scan').querySelector('.hero');
+  hero.hidden = live;
+  $('scanBanner').innerHTML = mode === 'demo'
+    ? `<div class="banner">${I.warn}<div>Demo mode. Everything below is simulated and does not come from a vehicle.</div></div>` : '';
+  $('btnConnect').disabled = mode === 'connecting'; $('btnDemo').disabled = mode === 'connecting';
+  if (mode === 'idle') { $('heroTitle').textContent = 'Connect your adapter'; $('heroSub').textContent = 'Plug a Bluetooth LE OBD-II adapter into the car and turn the ignition on.'; }
+  if (mode === 'connecting') { $('heroTitle').textContent = 'Connecting…'; $('heroSub').textContent = text === 'Connecting…' ? 'Pick your adapter from the list.' : 'Talking to the car. This can take up to 15 seconds.'; }
+  $('adapterText').textContent = live && S.transport ? (S.info && S.info.adapter ? S.info.adapter : S.transport.name) : 'None';
+  $('protoText').textContent = (live && S.info && S.info.protocol) || '--';
+  renderCodes(); renderGarageHeader(); renderAI();
+}
+function showScanError(msg) { $('scanBanner').innerHTML = `<div class="banner err">${I.warn}<div>${esc(msg)}</div></div>`; }
+
+function friendlyError(e) {
+  if (!e) return 'Something went wrong.';
+  if (e.name === 'NotFoundError') return null; // user closed the chooser
+  if (e.name === 'SecurityError' || e.name === 'NotAllowedError') return 'Bluetooth permission was denied. Allow Bluetooth for this site and try again.';
+  if (e.code === 'NO_SERIAL') return 'That device connected but does not look like an OBD-II adapter (no serial service found). Pick the adapter itself, and make sure it is not paired to another phone.' + (e.diag ? ' [GATT: ' + e.diag + ']' : '');
+  if (e.code === 'NO_ECU') return 'The adapter answered but the car did not. Turn the ignition ON (engine running is best), check the adapter is fully seated, then try again.';
+  if (e.code === 'NO_ANSWER') return 'The adapter did not respond. Unplug it for 10 seconds, plug it back in and try again.';
+  if (e.name === 'NetworkError') return 'Bluetooth connection failed. Move closer to the adapter and try again.';
+  return 'Connection failed' + (e.step ? ' at ' + e.step : '') + ': ' + (e.message || e.name || 'unknown error') + (e.diag ? ' [GATT: ' + e.diag + ']' : '');
+}
+
+async function connectAdapter() {
+  if (!navigator.bluetooth) {
+    showScanError('This browser cannot use Web Bluetooth. Use Chrome on Android or desktop, or the Bluefy browser on iPhone. You can still try Demo Mode.');
+    return;
+  }
+  setMode('connecting', 'Connecting…');
+  const t = new BleTransport();
+  try { await t.connect(); } catch (e) {
+    t.close(); setMode('idle'); const m = friendlyError(e); if (m) showScanError(m); else toast('No adapter selected'); return;
+  }
+  await startSession(t, false);
+}
+async function startDemo() { setMode('connecting', 'Starting demo…'); const t = new MockTransport(); await t.connect(); await startSession(t, true); }
+
+async function startSession(t, demo) {
+  S.transport = t; S.demo = demo; S.link = new ElmLink(t); S.timeouts = 0; S.live = {}; S.hist = { rpm: [], speed: [] };
+  S.dtcs = { stored: [], pending: [], permanent: [] }; S.readOnce = false; S.mil = null; S.chat = [];
+  t.onClose = () => { if (S.mode === 'connected' || S.mode === 'demo') linkLost(); };
+  setMode('connecting', 'Starting adapter…');
+  try { S.info = await initElm(S.link); } catch (e) {
+    teardown(); setMode('idle'); showScanError(friendlyError(e)); return;
+  }
+  setMode(demo ? 'demo' : 'connected', demo ? 'Demo' : 'Connected');
+  renderTiles(); updateTiles();
+  // vehicle
+  try {
+    const vin = parseVIN(await S.link.send('0902', 7000));
+    if (demo) { S.vehicle = { ...DEMO_VEHICLE }; } // demo data is never saved
+    else if (vin) { S.vehicle = { vin }; jsSet('vehicle', S.vehicle); decodeVin(vin, true); }
+  } catch (e) { /* older cars do not report a VIN */ }
+  renderVehicle(); renderGarageHeader();
+  await readMil();
+  await readCodes(true);
+  startPolling();
+  try { if (navigator.wakeLock && !demo) S.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+  if (S.vehicle.make) fetchRecalls(true);
+}
+function teardown() {
+  S.polling = false;
+  if (S.demo) { S.vehicle = jsGet('vehicle', {}); S.recalls = null; $('recallList').innerHTML = '<div class="empty"><b>No recall check yet</b>Uses the public NHTSA database.</div>'; $('recallCount').textContent = ''; $('complaintLine').textContent = ''; renderVehicle(); renderGarageHeader(); }
+  S.demo = false;
+  try { if (S.wake) S.wake.release(); } catch (e) {} S.wake = null;
+  if (S.link) S.link.close(); S.link = null; S.transport = null;
+}
+function linkLost() { teardown(); setMode('idle'); showScanError('The adapter disconnected. Check it is still plugged in, then reconnect.'); }
+async function disconnect() { teardown(); S.dtcs = { stored: [], pending: [], permanent: [] }; setMode('idle'); toast('Disconnected'); }
+$('btnConnect').addEventListener('click', connectAdapter);
+$('btnDemo').addEventListener('click', startDemo);
+$('btnDisconnect').addEventListener('click', disconnect);
+
+// ============================================================
+//  POLLING + LIVE DATA
+// ============================================================
+async function startPolling() {
+  if (S.polling) return; S.polling = true;
+  const list = GAUGES.filter((g) => !S.info || S.info.supported.size === 0 || S.info.supported.has(g.pid));
+  while (S.polling && S.link) {
+    for (const g of list) {
+      if (!S.polling || !S.link) break;
+      try {
+        const lines = await S.link.send('01' + g.pid, 2500);
+        const bytes = parseMode01(lines, g.pid);
+        const v = bytes && bytes.length ? g.dec(bytes) : null;
+        S.live[g.id] = (v === null || Number.isNaN(v)) ? null : v; S.timeouts = 0;
+      } catch (e) {
+        if (++S.timeouts >= 4) { linkLost(); return; }
+      }
+    }
+    S.hist.rpm.push(S.live.rpm ?? 0); S.hist.speed.push(S.live.speed ?? 0);
+    if (S.hist.rpm.length > 90) { S.hist.rpm.shift(); S.hist.speed.shift(); }
+    updateTiles(); drawChart();
+    await sleep(60);
+  }
+}
+function renderTiles() {
+  $('tiles').innerHTML = GAUGES.map((g) => `<div class="tile" id="g-${g.id}"><div class="v" id="gv-${g.id}">--</div><div class="u" id="gu-${g.id}">${esc(g.unit())}</div><div class="l">${esc(g.label)}</div></div>`).join('');
+}
+function updateTiles() {
+  for (const g of GAUGES) {
+    const el = $('gv-' + g.id); if (!el) continue;
+    const v = S.live[g.id];
+    el.textContent = v == null ? '--' : g.fmt(v);
+    $('gu-' + g.id).textContent = g.unit();
+    const st = v != null && g.warn ? g.warn(v) : '';
+    $('g-' + g.id).className = 'tile ' + st;
+  }
+}
+function drawChart() {
+  const c = $('chart'); if (!c || !c.clientWidth) return;
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const cs = getComputedStyle(document.documentElement);
+  const blue = cs.getPropertyValue('--blue').trim(), orange = cs.getPropertyValue('--orange').trim(), sep = cs.getPropertyValue('--sep').trim();
+  g.strokeStyle = sep; g.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { const y = Math.round(h * i / 4) + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  const line = (arr, max, color, fill) => {
+    if (arr.length < 2) return;
+    g.beginPath();
+    arr.forEach((v, i) => { const x = i / 89 * w, y = h - 4 - Math.min(1, v / max) * (h - 8); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.strokeStyle = color; g.lineWidth = 2.2; g.lineJoin = 'round'; g.stroke();
+    if (fill) { g.lineTo((arr.length - 1) / 89 * w, h); g.lineTo(0, h); g.closePath(); const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, color + '33'); gr.addColorStop(1, color + '00'); g.fillStyle = gr; g.fill(); }
+  };
+  line(S.hist.rpm, Math.max(4000, ...S.hist.rpm), blue, true);
+  line(S.hist.speed, Math.max(60, ...S.hist.speed), orange, false);
+}
+window.addEventListener('resize', drawChart);
+
+function renderVehicle() {
+  const v = S.vehicle || {};
+  $('v-name').textContent = [v.year, v.make, v.model].filter(Boolean).join(' ') || (v.vin ? 'Decoding…' : 'Not reported');
+  $('v-engine').textContent = v.engine || '--';
+  $('v-vin').textContent = v.vin || 'Not reported';
+}
+async function readMil() {
+  try {
+    const b = parseMode01(await S.link.send('0101', 4000), '01');
+    if (b && b.length >= 1) S.mil = { on: !!(b[0] & 0x80), count: b[0] & 0x7f };
+  } catch (e) {}
+  const m = S.mil;
+  $('v-mil').textContent = m ? (m.on ? 'ON · ' + m.count + ' code' + (m.count === 1 ? '' : 's') : 'Off') : 'Unknown';
+  const chip = $('milChip'); chip.className = 'chip ' + (m ? (m.on ? 'bad' : 'ok') : '');
+  chip.lastElementChild.textContent = m ? (m.on ? 'Check engine ON' : 'Check engine off') : 'No data';
+}
+
+// ============================================================
+//  FAULT CODES
+// ============================================================
+async function readCodes(quiet) {
+  if (!S.link) { toast('Connect an adapter first', 'err'); return; }
+  const btns = [$('btnReadCodes'), $('btnRead2')]; btns.forEach((b) => b.disabled = true);
+  try {
+    const can = S.info ? S.info.can : true;
+    const get = async (mode) => { try { const l = await S.link.send(mode, 8000); return isErr(l) ? [] : parseDTCs(l, mode, can); } catch (e) { return []; } };
+    S.dtcs.stored = await get('03'); S.dtcs.pending = await get('07'); S.dtcs.permanent = await get('0A');
+    S.readOnce = true; await readMil();
+    const n = S.dtcs.stored.length + S.dtcs.pending.length;
+    if (!quiet) toast(n ? n + ' code' + (n === 1 ? '' : 's') + ' found' : 'No fault codes', n ? '' : 'ok');
+  } finally { btns.forEach((b) => b.disabled = false); renderCodes(); }
+}
+function renderCodes() {
+  const live = S.mode === 'connected' || S.mode === 'demo';
+  const total = S.dtcs.stored.length + S.dtcs.pending.length + S.dtcs.permanent.length;
+  $('btnRead2').disabled = !live; $('btnClear').disabled = !live || !total;
+  $('btnReadCodes').hidden = !live;
+  const dot = $('codeDot'); dot.hidden = !total; dot.textContent = total;
+  const body = $('codesBody');
+  if (!live) { body.innerHTML = `<div class="card"><div class="empty">${I.car}<b>No adapter connected</b>Connect on the Scan tab to read fault codes.</div></div>`; return; }
+  if (!S.readOnce) { body.innerHTML = `<div class="card"><div class="empty"><b>Not read yet</b>Tap Read Fault Codes.</div></div>`; return; }
+  if (!total) { body.innerHTML = `<div class="card"><div class="empty" style="color:var(--green)">${I.check}<b style="color:var(--label)">No fault codes</b>The car reports no stored, pending or permanent codes.</div></div>`; return; }
+  const group = (title, arr, kind) => arr.length ? `<div class="sect">${title}</div><div class="card">${arr.map((c) => { const d = describeDTC(c); return `<button class="row tap" data-code="${c}"><span class="code">${c}</span><div class="grow">${esc(d.desc)}<small>${esc(d.sys)}</small></div><span class="badge ${d.sev}">${d.sev.toUpperCase()}</span>${I.chev}</button>`; }).join('')}</div>` : '';
+  body.innerHTML = group('Stored', S.dtcs.stored) + group('Pending', S.dtcs.pending) + group('Permanent', S.dtcs.permanent);
+}
+$('codesBody').addEventListener('click', (e) => { const r = e.target.closest('[data-code]'); if (r) showCode(r.dataset.code); });
+function showCode(code) {
+  const d = describeDTC(code);
+  const n = html(`<div class="card" style="margin-bottom:12px"><div class="row"><span class="code" style="font-size:22px">${code}</span><span class="badge ${d.sev}">${d.sev.toUpperCase()}</span></div>
+    <div class="row"><div class="grow">${esc(d.desc)}<small>System: ${esc(d.sys)}</small></div></div></div>
+    <p class="foot" style="margin:0 0 14px">${d.sev === 'high' ? 'High severity: avoid long or hard driving until this is checked. Misfires can damage the catalytic converter.' : d.sev === 'medium' ? 'Medium severity: drivable in most cases, but get it checked soon.' : 'Low severity: usually not urgent, but do not ignore it.'}</p>
+    <button class="btn" id="askAi">Ask LazAI about ${code}</button>`);
+  n.querySelector('#askAi').onclick = () => { closeSheet(); setTab('ai'); askAI(`Explain ${code} (${d.desc}) on my car. What are the most likely causes, what should I check first, and is it safe to drive?`); };
+  openSheet(code, n);
+}
+$('btnRead2').addEventListener('click', () => readCodes(false));
+$('btnReadCodes').addEventListener('click', () => { readCodes(false).then(() => setTab('codes')); });
+$('btnClear').addEventListener('click', async () => {
+  const ok = await confirmSheet('Clear fault codes?', 'This turns off the check-engine light and resets readiness monitors. If the fault is still present the code will come back.', 'Clear Codes', true);
+  if (!ok || !S.link) return;
+  try { await S.link.send('04', 8000); await sleep(400); await readCodes(true); toast('Clear command sent', 'ok'); } catch (e) { toast('Could not clear codes', 'err'); }
+});
+
+// ============================================================
+//  VEHICLE / NHTSA
+// ============================================================
+async function decodeVin(vin, silent) {
+  try {
+    const r = await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/' + encodeURIComponent(vin) + '?format=json');
+    const j = await r.json(); const x = (j.Results || [])[0] || {};
+    if (!x.Make) throw new Error('not decoded');
+    S.vehicle = { vin, year: x.ModelYear || '', make: (x.Make || '').toUpperCase(), model: (x.Model || '').toUpperCase(),
+      engine: [x.DisplacementL ? (+x.DisplacementL).toFixed(1) + 'L' : '', x.EngineConfiguration ? x.EngineConfiguration.replace(/in-line/i, 'I').replace(/V-Shaped/i, 'V') : '', x.EngineCylinders && !/in-line/i.test(x.EngineConfiguration || '') ? x.EngineCylinders : ''].filter(Boolean).join(' '), trim: x.Trim || '' };
+    jsSet('vehicle', S.vehicle); renderVehicle(); renderGarageHeader();
+    if (!silent) toast('VIN decoded', 'ok');
+    return true;
+  } catch (e) { if (!silent) toast('Could not decode that VIN. Check the characters or your connection.', 'err'); return false; }
+}
+function renderGarageHeader() {
+  const v = S.vehicle || {};
+  const nm = [v.year, v.make, v.model].filter(Boolean).join(' ');
+  $('g-name').textContent = nm || 'No vehicle yet';
+  $('g-sub').textContent = v.vin ? 'VIN ' + v.vin : 'Connect an adapter or enter a VIN.';
+  if (document.activeElement !== $('vinInput')) $('vinInput').value = v.vin || '';
+  if (document.activeElement !== $('yrInput')) $('yrInput').value = v.year || '';
+  if (document.activeElement !== $('mkInput')) $('mkInput').value = v.make || '';
+  if (document.activeElement !== $('mdInput')) $('mdInput').value = v.model || '';
+}
+$('btnDecode').addEventListener('click', async () => {
+  const vin = $('vinInput').value.trim().toUpperCase();
+  if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) { toast('A VIN is 17 characters (no I, O or Q)', 'err'); return; }
+  $('btnDecode').disabled = true; await decodeVin(vin); $('btnDecode').disabled = false; if (S.vehicle.make) fetchRecalls();
+});
+async function fetchRecalls(auto) {
+  if (!auto) { // typed fields win over the decoded vehicle
+    const y = $('yrInput').value.trim(), mk = $('mkInput').value.trim().toUpperCase(), md = $('mdInput').value.trim().toUpperCase();
+    if (y || mk || md) { S.vehicle = { ...S.vehicle, year: y, make: mk, model: md }; if (!S.demo) jsSet('vehicle', S.vehicle); renderGarageHeader(); renderVehicle(); }
+  }
+  const { year, make, model } = S.vehicle || {};
+  const list = $('recallList');
+  if (!year || !make || !model) { if (!auto) toast('Enter a year, make and model first', 'err'); return; }
+  list.innerHTML = '<div class="empty"><b>Checking NHTSA…</b></div>'; $('complaintLine').textContent = '';
+  const q = `make=${encodeURIComponent(make)}&model=${encodeURIComponent(model)}&modelYear=${encodeURIComponent(year)}`;
+  try {
+    const r = await fetch('https://api.nhtsa.gov/recalls/recallsByVehicle?' + q);
+    if (!r.ok) throw new Error('http ' + r.status);
+    const j = await r.json(); const rec = j.results || [];
+    S.recalls = rec; $('recallCount').textContent = rec.length + (rec.length === 1 ? ' recall' : ' recalls');
+    list.innerHTML = rec.length ? rec.slice(0, 20).map((x, i) => `<button class="row tap" data-r="${i}"><div class="grow"><b style="font-weight:600">${esc(x.Component || 'Recall')}</b><small>${esc(x.NHTSACampaignNumber || '')} · ${esc((x.Summary || '').slice(0, 110))}…</small></div>${I.chev}</button>`).join('')
+      : `<div class="empty" style="color:var(--green)">${I.check}<b style="color:var(--label)">No recalls found</b>For ${esc(year + ' ' + make + ' ' + model)}.</div>`;
+    fetch('https://api.nhtsa.gov/complaints/complaintsByVehicle?' + q).then((c) => c.json()).then((c) => {
+      $('complaintLine').textContent = (c.count || 0) + ' owner complaints on file with NHTSA for this model year.';
+    }).catch(() => {});
+  } catch (e) { list.innerHTML = '<div class="empty"><b>Recall lookup failed</b>Check your connection and try again.</div>'; }
+}
+$('btnRecalls').addEventListener('click', () => fetchRecalls(false));
+$('recallList').addEventListener('click', (e) => {
+  const r = e.target.closest('[data-r]'); if (!r || !S.recalls) return; const x = S.recalls[+r.dataset.r];
+  openSheet(x.NHTSACampaignNumber || 'Recall', html(`<div class="card pad"><p><b>${esc(x.Component || '')}</b></p><p style="margin-top:8px">${esc(x.Summary || '')}</p>
+    <p class="foot" style="margin:12px 0 0"><b>Risk:</b> ${esc(x.Consequence || 'n/a')}</p><p class="foot" style="margin:8px 0 0"><b>Remedy:</b> ${esc(x.Remedy || 'n/a')}</p></div>`));
+});
+
+// ============================================================
+//  LAZAI (Groq)
+// ============================================================
+const SYSTEM_PROMPT = `You are LazAI, the diagnostic assistant inside LazScan, an OBD-II app used by home mechanics. Be direct and practical. For each problem give: likely causes ranked with rough percentages, the cheapest checks first, the fix, a ballpark parts cost and difficulty, and whether it is safe to keep driving. Use short markdown lists. Never invent readings you were not given. If you are unsure, say so. Remind the user to confirm torque specs and safety steps in a repair manual when giving repair steps.`;
+function carContext() {
+  const v = S.vehicle || {}; const out = [];
+  out.push('Vehicle: ' + ([v.year, v.make, v.model, v.engine].filter(Boolean).join(' ') || 'unknown') + (v.vin ? ' (VIN ' + v.vin + ')' : ''));
+  const codes = [...S.dtcs.stored.map((c) => c + ' stored'), ...S.dtcs.pending.map((c) => c + ' pending'), ...S.dtcs.permanent.map((c) => c + ' permanent')];
+  out.push('Fault codes: ' + (S.readOnce ? (codes.length ? codes.map((c) => { const [k, s] = c.split(' '); return `${k} ${describeDTC(k).desc} (${s})`; }).join('; ') : 'none') : 'not read'));
+  const lv = GAUGES.filter((g) => S.live[g.id] != null).map((g) => `${g.label}=${g.fmt(S.live[g.id])}${g.unit()}`);
+  if (lv.length && !S.demo) out.push('Live data: ' + lv.join(', '));
+  if (S.demo) out.push('(This is simulated demo data.)');
+  return out.join('\n');
+}
+async function groqChat(messages) {
+  const key = getKey(); if (!key) throw new Error('Add your Groq API key in Settings first.');
+  const model = getModel(); const body = { model, messages, temperature: 0.3, max_tokens: 900 };
+  if (/qwen3/i.test(model)) body.reasoning_effort = 'none';
+  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) {
+    if (r.status === 401) throw new Error('Groq rejected the API key (401). Check it in Settings.');
+    if (r.status === 429) throw new Error('Groq rate limit reached. Wait a moment and try again.');
+    let d = ''; try { d = (await r.json()).error.message; } catch (e) {}
+    throw new Error('Groq error ' + r.status + (d ? ': ' + d.slice(0, 140) : ''));
+  }
+  const j = await r.json();
+  return String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+function md(text) {
+  const lines = esc(text).split('\n'); let out = '', list = null;
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  const close = () => { if (list) { out += `</${list}>`; list = null; } };
+  for (const raw of lines) {
+    const l = raw.trim(); let m;
+    if ((m = l.match(/^[-*•]\s+(.*)/))) { if (list !== 'ul') { close(); out += '<ul>'; list = 'ul'; } out += '<li>' + inline(m[1]) + '</li>'; }
+    else if ((m = l.match(/^\d+[.)]\s+(.*)/))) { if (list !== 'ol') { close(); out += '<ol style="padding-left:20px">'; list = 'ol'; } out += '<li>' + inline(m[1]) + '</li>'; }
+    else if (!l) close();
+    else { close(); out += '<p>' + inline(l.replace(/^#+\s*/, '')) + '</p>'; }
+  }
+  close(); return out;
+}
+function renderAI() {
+  const hasKey = !!getKey();
+  $('aiEmpty').innerHTML = !hasKey ? `<div class="empty">${I.warn.replace('width="20" height="20"', 'width="40" height="40"')}<b>Add a Groq key</b>LazAI uses your own free Groq key.<div style="margin-top:14px"><button class="btn sm" id="goKey">Open Settings</button></div></div>`
+    : (S.chat.length ? '' : `<div class="empty"><b>Ask LazAI</b>It sees your vehicle, fault codes and live data${S.demo ? ' (demo data right now)' : ''}.</div>`);
+  const g = $('goKey'); if (g) g.onclick = () => { setTab('settings'); $('keyInput').focus(); };
+  $('chat').innerHTML = S.chat.map((m) => `<div class="msg ${m.role === 'user' ? 'u' : 'a'}">${m.role === 'user' ? esc(m.content) : (m.pending ? '<span class="dots"><span></span><span></span><span></span></span>' : md(m.content))}</div>`).join('');
+  const total = S.dtcs.stored.length + S.dtcs.pending.length;
+  const qs = [total ? 'Diagnose my codes' : null, 'What should I check first?', 'Is it safe to drive?', 'Give me step-by-step fix instructions'].filter(Boolean);
+  $('chips').innerHTML = hasKey && !S.chat.length ? qs.map((q) => `<button class="btn sm tint" data-q="${esc(q)}">${esc(q)}</button>`).join('') : '';
+  $('aiSend').disabled = S.busy || !hasKey; $('aiInput').disabled = !hasKey;
+  const last = $('chat').lastElementChild; if (last) last.scrollIntoView({ block: 'nearest' });
+}
+async function askAI(q) {
+  if (S.busy) return; if (!getKey()) { setTab('ai'); renderAI(); return; }
+  S.busy = true; S.chat.push({ role: 'user', content: q }); S.chat.push({ role: 'assistant', content: '', pending: true }); renderAI();
+  try {
+    const msgs = [{ role: 'system', content: SYSTEM_PROMPT + '\n\nCurrent car data:\n' + carContext() }, ...S.chat.filter((m) => !m.pending).slice(-10).map((m) => ({ role: m.role, content: m.content }))];
+    const a = await groqChat(msgs); S.chat.pop(); S.chat.push({ role: 'assistant', content: a || 'No answer came back. Try again.' });
+  } catch (e) { S.chat.pop(); S.chat.push({ role: 'assistant', content: 'Sorry, that did not work. ' + e.message }); }
+  S.busy = false; renderAI();
+}
+$('composer').addEventListener('submit', (e) => { e.preventDefault(); const t = $('aiInput').value.trim(); if (!t) return; $('aiInput').value = ''; $('aiInput').style.height = ''; askAI(t); });
+$('aiInput').addEventListener('input', (e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+$('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-q]'); if (b) askAI(b.dataset.q); });
+$('btnNewChat').addEventListener('click', () => { S.chat = []; renderAI(); });
+
+// ---- Groq model picker: fetch on key save + Refresh. Update only, never auto-swap. ----
+function renderModels() {
+  const sel = $('modelSel'); const cur = getModel();
+  const ids = [...new Set([cur, ...S.models])];
+  sel.innerHTML = ids.map((id) => `<option value="${esc(id)}"${id === cur ? ' selected' : ''}>${esc(id)}${S.models.length && !S.models.includes(id) ? ' (not in current list)' : ''}</option>`).join('');
+}
+async function fetchModels(manual) {
+  const key = $('keyInput').value.trim() || getKey();
+  if (!key) { if (manual) toast('Enter your Groq key first', 'err'); return; }
+  $('modelStatus').textContent = 'Loading models…';
+  try {
+    const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: 'Bearer ' + key } });
+    if (!r.ok) throw new Error(r.status === 401 ? 'Groq rejected that key (401).' : 'Groq error ' + r.status);
+    const j = await r.json();
+    const ids = (j.data || []).map((m) => m.id).filter((id) => id && !/whisper|guard|tts|playai|orpheus|embed|safeguard/i.test(id)).sort();
+    S.models = ids; jsSet('models', ids); renderModels();
+    const cur = getModel();
+    $('modelStatus').textContent = ids.length + ' chat models loaded.' + (ids.includes(cur) ? '' : ' Your selected model (' + cur + ') is not in the current list. It is kept; switch if it stops working.');
+  } catch (e) { $('modelStatus').textContent = 'Could not load models: ' + e.message; }
+}
+$('btnSaveKey').addEventListener('click', async () => {
+  const k = $('keyInput').value.trim(); lsSet('groq_key', k);
+  if (!k) { toast('Key removed'); $('modelStatus').textContent = 'Get a free key at console.groq.com. It stays in this browser and is only sent to api.groq.com.'; return; }
+  toast('Key saved', 'ok'); await fetchModels(false);
+});
+$('btnRefreshModels').addEventListener('click', () => fetchModels(true));
+$('modelSel').addEventListener('change', (e) => { lsSet('model', e.target.value); toast('Model: ' + e.target.value); });
+
+// ============================================================
+//  NFC COMPONENT TAGS
+// ============================================================
+function renderTags() {
+  const l = $('tagList');
+  l.innerHTML = S.tags.length ? S.tags.map((t) => `<div class="row"><div class="grow"><b style="font-weight:600">${esc(t.name)}</b><small>${esc(t.part || 'No part number')} · Installed ${esc(t.installed || 'unknown')}</small></div></div>`).join('')
+    : '<div class="empty"><b>No tagged parts</b>Write a tag to record a part, or read one.</div>';
+}
+function addTag(t) {
+  const i = S.tags.findIndex((x) => x.name === t.name && x.part === t.part);
+  if (i >= 0) S.tags[i] = t; else S.tags.push(t); jsSet('tags', S.tags); renderTags();
+}
+$('btnTagRead').addEventListener('click', async () => {
+  if (!('NDEFReader' in window)) { toast('NFC needs Android with Chrome', 'err'); return; }
+  try {
+    const ndef = new NDEFReader(); await ndef.scan(); toast('Hold the phone against a tag');
+    ndef.onreading = (ev) => {
+      const rec = ev.message.records[0]; const txt = new TextDecoder(rec.encoding || 'utf-8').decode(rec.data);
+      const [name, part, installed] = txt.split('|'); if (!name) { toast('Tag is empty or not a LazScan tag', 'err'); return; }
+      addTag({ name, part: part === 'N/A' ? '' : part, installed }); toast('Read: ' + name, 'ok');
+    };
+  } catch (e) { toast('NFC: ' + e.message, 'err'); }
+});
+$('btnTagWrite').addEventListener('click', () => {
+  if (!('NDEFReader' in window)) { toast('NFC needs Android with Chrome', 'err'); return; }
+  const n = html(`<div class="card"><div class="row"><div class="field" style="width:100%"><label for="tgName">Part</label><input id="tgName" placeholder="Air filter"></div></div>
+    <div class="row"><div class="field" style="width:100%"><label for="tgPart">Part no.</label><input id="tgPart" placeholder="Optional"></div></div></div>
+    <div style="margin-top:14px"><button class="btn" id="tgGo">Write to Tag</button></div>`);
+  n.querySelector('#tgGo').onclick = async () => {
+    const name = n.querySelector('#tgName').value.trim().replace(/\|/g, '/'), part = n.querySelector('#tgPart').value.trim().replace(/\|/g, '/');
+    if (!name) { toast('Enter a part name', 'err'); return; }
+    const installed = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    try { toast('Hold the phone against the tag'); await new NDEFReader().write({ records: [{ recordType: 'text', data: `${name}|${part || 'N/A'}|${installed}` }] }); addTag({ name, part, installed }); closeSheet(); toast('Tag written', 'ok'); }
+    catch (e) { toast('Write failed: ' + e.message, 'err'); }
+  };
+  openSheet('Write NFC Tag', n);
+});
+
+// ============================================================
+//  REPORT / NOTES / INSTALL / ERASE
+// ============================================================
+function printReport() {
+  const v = S.vehicle || {}; const all = [...S.dtcs.stored.map((c) => [c, 'Stored']), ...S.dtcs.pending.map((c) => [c, 'Pending']), ...S.dtcs.permanent.map((c) => [c, 'Permanent'])];
+  const rows = all.map(([c, k]) => { const d = describeDTC(c); return `<tr><td>${esc(c)}</td><td>${esc(d.desc)}</td><td>${esc(d.sys)}</td><td>${k}</td></tr>`; }).join('') || '<tr><td colspan="4">No fault codes</td></tr>';
+  const live = GAUGES.map((g) => `<div class="s"><span>${esc(g.label)}</span><b>${S.live[g.id] == null ? '--' : esc(g.fmt(S.live[g.id]) + ' ' + g.unit())}</b></div>`).join('');
+  const lastAI = [...S.chat].reverse().find((m) => m.role === 'assistant' && !m.pending);
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>LazScan Report</title><style>
+body{font:13px/1.45 -apple-system,Segoe UI,Arial,sans-serif;margin:36px;color:#0C1A33}h1{font-size:22px;color:#0A6FCB;margin:0}h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#52627D;border-bottom:2px solid #0A6FCB;padding-bottom:4px;margin:22px 0 8px}
+.meta{color:#52627D;font-size:11px;margin-top:4px}.demo{background:#FFE7D1;color:#B54700;padding:8px 12px;border-radius:8px;margin-top:14px;font-weight:600}
+table{width:100%;border-collapse:collapse}th{text-align:left;background:#0C2454;color:#fff;padding:7px;font-size:11px}td{padding:7px;border-bottom:1px solid #E7EBF2}
+.g{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.s{background:#F2F4F8;border-left:3px solid #FF7A1A;padding:8px 10px}.s span{display:block;font-size:10px;color:#52627D;text-transform:uppercase}.s b{font-size:16px}
+.ai{background:#F2F4F8;padding:12px;border-radius:8px;white-space:pre-wrap}.f{margin-top:30px;font-size:10px;color:#8593AA}</style></head><body>
+<h1>LazScan — Diagnostic Report</h1><div class="meta">${esc(new Date().toLocaleString())} · App ${VERSION} · Adapter: ${esc((S.info && S.info.adapter) || (S.transport && S.transport.name) || 'none')}</div>
+${S.demo ? '<div class="demo">DEMO DATA — simulated, not from a vehicle.</div>' : ''}
+<h2>Vehicle</h2><p><b>${esc([v.year, v.make, v.model].filter(Boolean).join(' ') || 'Unknown')}</b> ${esc(v.engine || '')}<br>VIN: ${esc(v.vin || 'not reported')}</p>
+<h2>Live data snapshot</h2><div class="g">${live}</div>
+<h2>Fault codes (${all.length})</h2><table><thead><tr><th>Code</th><th>Description</th><th>System</th><th>Type</th></tr></thead><tbody>${rows}</tbody></table>
+${lastAI ? '<h2>LazAI notes</h2><div class="ai">' + esc(lastAI.content) + '</div>' : ''}
+<div class="f">LazScan ${VERSION} · For information only. Verify with a qualified technician. © 2026 LAZLAB Creations.</div></body></html>`;
+  const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;width:0;height:0;border:0;right:0;bottom:0'; document.body.appendChild(f);
+  f.contentDocument.open(); f.contentDocument.write(doc); f.contentDocument.close();
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 2000); }, 300);
+}
+$('rowReport').addEventListener('click', printReport);
+$('rowNotes').addEventListener('click', () => {
+  const n = html('<div id="nList" class="card" style="margin-bottom:12px"></div><div class="card pad stack"><select id="nType" class="input"><option value="idea">Idea</option><option value="bug">Bug</option><option value="feature">Feature request</option></select><textarea id="nText" class="input" rows="3" placeholder="What should change?"></textarea><button class="btn" id="nAdd">Add note</button></div>');
+  const draw = () => { const notes = jsGet('notes', []); n.querySelector('#nList').innerHTML = notes.length ? notes.slice().reverse().map((x, ri) => `<div class="row"><div class="grow"><small style="text-transform:uppercase;font-weight:700">${esc(x.type)} · ${esc(x.date)}</small>${esc(x.text)}</div><button class="link" data-del="${notes.length - 1 - ri}" aria-label="Delete note">Delete</button></div>`).join('') : '<div class="empty"><b>No notes yet</b></div>'; };
+  n.addEventListener('click', (e) => { const d = e.target.closest('[data-del]'); if (!d) return; const notes = jsGet('notes', []); notes.splice(+d.dataset.del, 1); jsSet('notes', notes); draw(); });
+  n.querySelector('#nAdd').onclick = () => { const t = n.querySelector('#nText').value.trim(); if (!t) return; const notes = jsGet('notes', []); notes.push({ type: n.querySelector('#nType').value, text: t, date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }); jsSet('notes', notes); n.querySelector('#nText').value = ''; draw(); };
+  draw(); openSheet('Dev notes', n);
+});
+
+// ============================================================
+//  TESLA CAN PROBE (beta, read-only)
+//  Listens to the car's CAN bus with ELM327 monitor mode (ATMA). It never transmits.
+//  Purpose: find out whether this adapter can keep up with Tesla traffic before building battery views.
+// ============================================================
+async function runCanProbe(ids, secs, out) {
+  const log = (m) => { out.value += m + '\n'; out.scrollTop = out.scrollHeight; };
+  if (S.transport) { teardown(); setMode('idle'); } // free the adapter if a normal session is open
+  const t = new BleTransport();
+  let dead = false; t.onClose = () => { dead = true; };
+  let rx = '';
+  t.onData = (x) => { rx += x; };
+  await t.connect();
+  log('Adapter: ' + t.name + '  (' + (t.used || '?') + ')');
+  const waitPrompt = (ms) => new Promise((res) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const i = rx.indexOf('>');
+      if (i >= 0) { clearInterval(iv); const o = rx.slice(0, i); rx = rx.slice(i + 1); res(o); }
+      else if (dead || Date.now() - t0 > ms) { clearInterval(iv); const o = rx; rx = ''; res(o + ' [no prompt]'); }
+    }, 40);
+  });
+  const cmd = async (c, ms = 3000) => { rx = ''; await t.write(c + '\r'); return (await waitPrompt(ms)).replace(/[\r\n]+/g, ' ').trim(); };
+  try {
+    log('ATZ → ' + await cmd('ATZ', 5000));
+    for (const c of ['ATE0', 'ATL0', 'ATS1', 'ATH1', 'ATD0', 'ATCAF0', 'ATSP6']) { const r = await cmd(c); if (!/OK/.test(r)) log(c + ' → ' + r); }
+    log('Adapter voltage (ATRV) → ' + await cmd('ATRV'));
+    const FRAME = /^([0-9A-F]{3})((?: [0-9A-F]{2}){1,8})$/;
+    async function monitor(label, filt, seconds) {
+      if (dead) throw new Error('Adapter disconnected');
+      await cmd(filt ? 'ATCRA ' + filt : 'ATCRA');
+      rx = '';
+      const st = { frames: 0, ids: {}, errs: {}, sample: '' }; let pend = '';
+      const eat = (chunk) => {
+        pend += chunk; const lines = pend.split(/[\r\n]+/); pend = lines.pop();
+        for (let ln of lines) {
+          ln = ln.replace(/>/g, '').trim(); if (!ln || /^ATMA|^OK$|^SEARCHING/i.test(ln)) continue;
+          const m = ln.match(FRAME);
+          if (m) { st.frames++; st.ids[m[1]] = (st.ids[m[1]] || 0) + 1; if (!st.sample) st.sample = ln; }
+          else { const k = /BUFFER FULL/i.test(ln) ? 'BUFFER FULL' : /DATA ERROR/i.test(ln) ? 'DATA ERROR' : /CAN ERROR/i.test(ln) ? 'CAN ERROR' : /STOPPED/i.test(ln) ? null : /^\?/.test(ln) ? '?' : 'other'; if (k) st.errs[k] = (st.errs[k] || 0) + 1; }
+        }
+      };
+      const t0 = Date.now();
+      await t.write('ATMA\r');
+      while (Date.now() - t0 < seconds * 1000 && !dead) { await sleep(100); const c = rx; rx = ''; eat(c); }
+      const el = (Date.now() - t0) / 1000;
+      await t.write('\r'); // any character stops monitor mode
+      const t1 = Date.now(); while (Date.now() - t1 < 2500) { await sleep(60); const c = rx; rx = ''; eat(c); if (c.includes('>')) break; }
+      eat('\r');
+      st.fps = Math.round(st.frames / el); st.label = label;
+      const errTxt = Object.keys(st.errs).length ? '  ERRORS: ' + Object.entries(st.errs).map(([k, v]) => k + '×' + v).join(', ') : '';
+      log(label.padEnd(14) + st.frames + ' frames, ' + st.fps + '/s, ' + Object.keys(st.ids).length + ' IDs' + errTxt);
+      return st;
+    }
+    log('\n— Filtered listening (' + secs + 's each) —');
+    const filtered = [];
+    for (const id of ids) filtered.push(await monitor('ID ' + id, id, secs));
+    log('\n— All traffic (stress test, ' + secs + 's) —');
+    const all = await monitor('All IDs', null, secs);
+    const top = Object.entries(all.ids).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => k + '×' + v).join('  ');
+    if (top) log('Busiest IDs seen: ' + top);
+    if (all.sample) log('Sample frame: ' + all.sample);
+    // verdict
+    const seen = filtered.filter((f) => f.frames > 0), filtErr = filtered.some((f) => Object.keys(f.errs).length), allErr = Object.keys(all.errs).length > 0;
+    log('\n— Result —');
+    if (!all.frames && !seen.length) log('NO TRAFFIC. The car is probably asleep (wake it: open a door, or have it charging/in drive), or the cable is on the wrong bus. This does not say anything about the adapter yet.');
+    else if (seen.length && !filtErr) log('PASS: the adapter received ' + seen.map((f) => f.label.replace('ID ', '') + ' (' + f.fps + '/s)').join(', ') + ' cleanly while filtered. Tesla battery views look feasible with this adapter.' + (allErr ? ' Unfiltered it overflowed, as expected, so the app must always filter.' : ''));
+    else if (seen.length) log('PARTIAL: messages arrived but the adapter reported errors even while filtered. It may be too slow for more than one or two IDs at a time.');
+    else if (all.frames) log('INCONCLUSIVE: traffic exists (' + all.fps + '/s unfiltered) but none of the IDs you tried appeared. Try IDs from the "Busiest IDs" line.');
+    else log('FAIL: no messages got through.');
+  } finally { try { await t.write('\r'); } catch (e) {} t.close(); }
+}
+$('rowProbe').addEventListener('click', () => {
+  const n = html(`<p style="color:var(--label2);margin:4px 0 12px">Plug the adapter into your Tesla's diagnostic cable and wake the car (open a door, or have it charging). This only listens; it sends nothing to the car. It will disconnect any normal LazScan session.</p>
+  <div class="card pad stack">
+    <div class="field"><label for="pbIds">Message IDs to listen for (hex, comma separated)</label><input id="pbIds" class="input mono" value="102, 292, 352" autocapitalize="characters" autocomplete="off" spellcheck="false"></div>
+    <div class="field"><label for="pbSecs">Seconds per test</label><select id="pbSecs" class="input"><option>3</option><option selected>5</option><option>8</option></select></div>
+    <button class="btn" id="pbRun">Run probe</button>
+  </div>
+  <textarea id="pbOut" class="input mono" rows="14" readonly style="margin-top:12px;font-size:12px;width:100%" placeholder="Results appear here."></textarea>
+  <div class="stack" style="margin-top:10px"><button class="btn tint" id="pbCopy">Copy results</button></div>
+  <p class="foot">The default IDs are guesses from community Tesla CAN lists. "Busiest IDs" in the results shows what your car really sends.</p>`);
+  const out = n.querySelector('#pbOut'), run = n.querySelector('#pbRun');
+  run.onclick = async () => {
+    const ids = n.querySelector('#pbIds').value.split(/[\s,]+/).map((x) => x.trim().toUpperCase().replace(/^0X/, '').padStart(3, '0')).filter((x) => /^[0-9A-F]{3}$/.test(x)).slice(0, 8);
+    if (!navigator.bluetooth) { out.value = 'This browser cannot use Web Bluetooth.'; return; }
+    if (!ids.length) { out.value = 'Enter at least one 3-digit hex ID, e.g. 352.'; return; }
+    out.value = 'LazScan ' + VERSION + ' CAN probe\n'; run.disabled = true; run.textContent = 'Running…';
+    try { await runCanProbe(ids, +n.querySelector('#pbSecs').value, out); }
+    catch (e) { const m = friendlyError(e); out.value += '\n' + (m || 'No adapter selected.') + '\n'; }
+    run.disabled = false; run.textContent = 'Run again';
+  };
+  n.querySelector('#pbCopy').onclick = async () => { try { await navigator.clipboard.writeText(out.value); toast('Copied', 'ok'); } catch (e) { out.select(); toast('Select and copy the text'); } };
+  openSheet('Tesla CAN probe', n);
+});
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('rowInstall').hidden = false; });
+window.addEventListener('appinstalled', () => { installEvt = null; $('rowInstall').hidden = true; toast('Installed', 'ok'); });
+$('rowInstall').addEventListener('click', async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('rowInstall').hidden = true; });
+$('btnClearAll').addEventListener('click', async () => {
+  if (!(await confirmSheet('Erase all data?', 'Removes your API key, notes, tags, saved vehicle and settings from this device.', 'Erase Everything', true))) return;
+  try { Object.keys(localStorage).filter((k) => k.startsWith('lazscan_')).forEach((k) => localStorage.removeItem(k)); } catch (e) {}
+  S.vehicle = {}; S.tags = []; S.models = []; S.chat = []; $('keyInput').value = '';
+  applyTheme('garage'); renderModels(); renderTags(); renderGarageHeader(); renderAI(); toast('All data erased');
+});
+
+// ============================================================
+//  SERVICE WORKER
+// ============================================================
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('./sw.js', { scope: './' }).then((reg) => {
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) toast('Update ready. Reopen the app to apply.'); });
+    });
+  }).catch(() => {});
+}
+
+// ============================================================
+//  INIT
+// ============================================================
+(function init() {
+  $('verText').textContent = VERSION;
+  const theme = lsGet('theme', 'garage'); applyTheme(['garage', 'midnight', 'auto'].includes(theme) ? theme : (theme === 'light' ? 'garage' : 'midnight'));
+  document.querySelectorAll('#unitSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === lsGet('units', 'imperial'))));
+  $('keyInput').value = getKey(); renderModels(); renderTags(); renderTiles(); renderVehicle(); renderGarageHeader(); renderCodes(); setMode('idle');
+  const h = location.hash.replace('#', ''); if (TITLES[h]) setTab(h);
+  registerSW();
+})();
+// test hooks (used by the automated checks; harmless in production)
+window.__lazscan = { parseMode01, parseDTCs, parseVIN, parseSupported, assembleMessages, cleanLines, describeDTC, initElm, ElmLink, MockTransport, md };
+</script>
+</body>
+</html>
