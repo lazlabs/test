@@ -366,6 +366,7 @@ button{cursor:pointer;background:none;border:0}
   <div class="sect">Tesla (beta)</div>
   <div class="card">
     <button class="row tap" id="rowTMon"><div class="grow">Pack monitor<small>Live pack voltage, current and power. Needs a Tesla diagnostic cable.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowTAlert"><div class="grow">Tesla alert lookup<small>Type a code from Service Mode → Service Alerts. LazAI helps explain it.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowTEst"><div class="grow">Used Tesla battery estimate<small>Estimate health from the range and % on any Tesla's screen. No adapter needed.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowLog"><div class="grow">CAN logger<small>Capture every message the car sends (about 4 min) to find the battery capacity message.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowProbe"><div class="grow">CAN probe<small>Check which messages your adapter can hear on a Tesla. Read-only.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
@@ -404,7 +405,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.4.0'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.5.0'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1417,9 +1418,10 @@ function openTeslaMonitor() {
     <div style="padding:0 16px 14px"><div class="tm-bar"><i id="tmFill"></i><b></b></div><div class="tm-lbl"><span>Using power</span><span id="tmDir" style="font-weight:600;color:var(--label)">Idle</span><span>Charging</span></div></div></div>
     <div class="card pad" style="margin-top:10px"><div class="sect" style="margin:0 0 6px">Last 3 minutes</div><svg id="tmChart" viewBox="0 0 300 110" style="width:100%;height:110px;display:block"></svg>
       <div class="legend"><span><i style="background:var(--blue)"></i>Pack voltage</span><span><i style="background:var(--orange)"></i>Power</span></div></div>
+    <div class="card" style="margin-top:10px"><div class="vgrid"><div><span>12 V rail</span><b id="tm12">--</b></div><div><span>12 V status</span><b id="tm12s" style="font-size:14px">Waiting</b></div></div></div>
     <div class="card" style="margin-top:10px"><div class="vgrid"><div><span>Energy in</span><b id="tmIn">0 Wh</b></div><div><span>Energy out</span><b id="tmOut">0 Wh</b></div></div></div>
     <div class="card pad stack" style="margin-top:10px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="sect" style="margin:0">Battery energy report</div><span class="badge medium">CANDIDATE</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="sect" style="margin:0">Battery energy report</div><span class="badge low">BETA</span></div>
       <div id="tmEn" style="text-align:center"></div>
       <div class="field"><label for="tmNF">Full pack when new (kWh)</label><input id="tmNF" class="input" inputmode="decimal" placeholder="75" style="text-align:right"></div>
     </div>
@@ -1429,7 +1431,7 @@ function openTeslaMonitor() {
       <div class="te-in">
         <div class="field"><label for="tmS">% at start</label><input id="tmS" class="input" inputmode="decimal" placeholder="40"></div>
         <div class="field"><label for="tmE">% now</label><input id="tmE" class="input" inputmode="decimal" placeholder="80"></div>
-        <div class="field full"><label for="tmN">Capacity when new (kWh)</label><input id="tmN" class="input" inputmode="decimal" placeholder="71.8"></div>
+        <div class="field full"><label for="tmN">Usable capacity when new (kWh), optional</label><input id="tmN" class="input" inputmode="decimal" placeholder="leave blank if unsure"></div>
       </div>
       <div id="tmCap" style="text-align:center;padding:4px 0"></div>
     </div>
@@ -1438,11 +1440,11 @@ function openTeslaMonitor() {
       <div class="seg" id="tmSign" role="group" aria-label="Current direction"><button data-v="pos" aria-pressed="true">Charging is +</button><button data-v="neg" aria-pressed="false">Charging is −</button></div>
       <button class="btn" id="tmGo">Connect &amp; start</button>
     </div>
-    <p class="tm-note">Beta. The decode of message 0x102 is a best guess: if power looks backwards, flip the direction switch. Check voltage against another source before relying on it. Read-only; nothing is sent to the car.</p>
+    <p class="tm-note">Beta. The decode of message 0x102 is a best guess: if power looks backwards, flip the direction switch. Check voltage against another source before relying on it. Read-only. The 12 V reading comes from the adapter's own voltage sensor (about every 30 s, with a one-second data gap). Voltage only, not battery health.</p>
     <div class="tm-raw" id="tmRaw"></div>`);
   const $n = (q) => n.querySelector(q);
-  $n('#tmCells').value = String(cells); $n('#tmN').value = lsGet('tesla_new', '');
-  $n('#tmN').addEventListener('input', () => lsSet('tesla_new', $n('#tmN').value));
+  $n('#tmCells').value = String(cells); $n('#tmN').value = lsGet('tesla_new2', '');
+  $n('#tmN').addEventListener('input', () => lsSet('tesla_new2', $n('#tmN').value));
   $n('#tmNF').value = lsGet('tesla_newfull', ''); $n('#tmNF').addEventListener('input', () => { lsSet('tesla_newfull', $n('#tmNF').value); drawEn(); });
   const syncSeg = () => $n('#tmSign').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === 'pos') === chargePos)));
   syncSeg();
@@ -1483,15 +1485,15 @@ function openTeslaMonitor() {
   function drawEn() {
     const box = $n('#tmEn'), e = st.en, dim = 'color:var(--label3);font-size:14px';
     if (!e) { box.innerHTML = `<span style="${dim}">${st.running ? 'Waiting for message 382 (about once a second)…' : 'Start the monitor to read the car’s own energy report.'}</span>`; return; }
-    const nw = parseFloat(String($n('#tmNF').value).replace(',', '.')), h = nw > 0 ? e.full / nw * 100 : null, pr = e.full > 0 ? e.rem / e.full * 100 : 0;
+    const nw = parseFloat(String($n('#tmNF').value).replace(',', '.')), h = nw > 0 ? e.full / nw * 100 : null, usable = e.full - e.buf, pr = usable > 0 ? (e.rem - e.buf) / usable * 100 : 0;
     const cell = (l, v) => `<div><span>${l}</span><b>${v.toFixed(1)} kWh</b></div>`;
     const dr = st.rem0 != null ? e.rem - st.rem0 : null, net = (st.whIn - st.whOut) / 1000;
     box.innerHTML = `<div class="tm-big">${e.full.toFixed(1)}<span style="font-size:18px"> kWh</span></div><div style="color:var(--label2);font-size:14px;margin-top:4px">full pack energy (as the car reports it)</div>` +
       (h ? `<div style="font-weight:700;font-size:20px;margin-top:6px">${h.toFixed(0)}% of new (${nw} kWh)</div>` : `<div style="${dim};margin-top:6px">Enter the full-pack figure from when the car was new to get a percentage.</div>`) +
-      `<div class="vgrid" style="margin-top:12px;text-align:left">${cell('Remaining', e.rem)}${cell('Expected remaining', e.exp)}${cell('Ideal remaining', e.ideal)}${cell('To finish charge', e.toChg)}${cell('Reserve', e.buf)}<div><span>Remaining ÷ full</span><b>${pr.toFixed(0)}%</b></div></div>` +
+      `<div class="vgrid" style="margin-top:12px;text-align:left">${cell('Remaining', e.rem)}${cell('Usable now', e.rem - e.buf)}${cell('Expected remaining', e.exp)}${cell('Ideal remaining', e.ideal)}${cell('Reserve', e.buf)}${cell('Usable when full', usable)}<div><span>Charge level</span><b>${pr.toFixed(1)}%</b></div><div><span>Field 5 (unknown)</span><b>${e.toChg.toFixed(1)}</b></div></div>` +
       (dr != null && Math.abs(net) > 0.05 ? `<div style="${dim};margin-top:10px;text-align:left">Check: the car's remaining energy moved ${dr >= 0 ? '+' : ''}${dr.toFixed(1)} kWh while the monitor measured ${net >= 0 ? '+' : ''}${net.toFixed(2)} kWh at the pack. These should be close.</div>` : '') +
       (st.life ? `<div style="${dim};margin-top:8px;text-align:left">Lifetime: ${(st.life.chg / 1000).toFixed(1)} MWh in, ${(st.life.dis / 1000).toFixed(1)} MWh out, about ${Math.round(st.life.chg / e.full)} full cycles.</div>` : '') +
-      `<div style="${dim};margin-top:8px;text-align:left;font-size:12px">Labels come from a similar Tesla layout and are not confirmed for your car. Compare "Remaining ÷ full" with the % on the screen.</div>`;
+      `<div style="${dim};margin-top:8px;text-align:left;font-size:12px">Charge level = (remaining − reserve) ÷ (full pack − reserve). On a 2016 Model X 75D it matched the car's own % display. The labels are borrowed from a similar Tesla layout; "Field 5" did not behave like the label it came with, so it is shown unlabeled. Compare Charge level with the % on your screen.</div>`;
   }
   function capCalc() {
     const box = $n('#tmCap'), a = parseFloat($n('#tmS').value), b = parseFloat($n('#tmE').value), nw = parseFloat(String($n('#tmN').value).replace(',', '.'));
@@ -1504,8 +1506,8 @@ function openTeslaMonitor() {
     else if (cap < 20 || cap > 130) warn = 'This looks wrong for a Tesla pack, so the current decode may be off.';
     else if (Math.abs(d) < 10) warn = 'Under 10 points of charge: very rough. Charge further for a better number.';
     if (warn && (Math.abs(net) < 0.3 || cap < 0 || cap < 20 || cap > 130)) { box.innerHTML = `<span style="color:var(--orange-text);font-size:14px">${esc(warn)}</span><div class="mono" style="font-size:12px;color:var(--label3);margin-top:4px">${net.toFixed(2)} kWh over ${d} points</div>`; return; }
-    const h = nw > 0 ? cap / nw * 100 : null;
-    box.innerHTML = `<div class="tm-big">${cap.toFixed(1)}<span style="font-size:18px"> kWh</span></div><div style="color:var(--label2);font-size:14px;margin-top:4px">usable capacity, about ±${pm}%</div>` + (h ? `<div style="font-weight:600;margin-top:6px">${h.toFixed(0)}% of new (${nw} kWh)</div>` : '<div style="color:var(--label3);font-size:13px;margin-top:6px">Add the new capacity to get a health percentage.</div>') + (warn ? `<div style="color:var(--orange-text);font-size:13px;margin-top:6px">${esc(warn)}</div>` : '');
+    const h = nw > 0 ? cap / nw * 100 : null, usableBms = st.en ? st.en.full - st.en.buf : null;
+    box.innerHTML = `<div class="tm-big">${cap.toFixed(1)}<span style="font-size:18px"> kWh</span></div><div style="color:var(--label2);font-size:14px;margin-top:4px">usable capacity, about ±${pm}%</div>` + (h ? `<div style="font-weight:600;margin-top:6px">${h.toFixed(0)}% of new (${nw} kWh)</div>` : '<div style="color:var(--label3);font-size:13px;margin-top:6px">Add the new capacity to get a health percentage.</div>') + (usableBms ? `<div style="color:var(--label2);font-size:13px;margin-top:8px">The car's own report says ${usableBms.toFixed(1)} kWh usable, so this measurement is ${((cap / usableBms - 1) * 100).toFixed(0)}% ${cap >= usableBms ? 'above' : 'below'} it.</div>` : '') + (warn ? `<div style="color:var(--orange-text);font-size:13px;margin-top:6px">${esc(warn)}</div>` : '');
   }
   ['#tmS', '#tmE', '#tmN'].forEach((q) => $n(q).addEventListener('input', capCalc));
   let sec = 0;
@@ -1518,8 +1520,21 @@ function openTeslaMonitor() {
     if (st.running && st.lastFrame && now - st.lastFrame > 6000) chip('bad', 'No data. Wake the car'); else if (st.running && st.frames) chip('ok', 'Live');
     draw();
   }
+  async function read12() {
+    const m = st.mon; if (!m || !st.running || st.b12 || m.dead) return; st.b12 = true;
+    try {
+      await m.halt(); const o = await m.cmd('ATRV', 2500); const x = o.match(/(\d{1,2}\.\d)\s*V/i);
+      if (x) { st.v12 = parseFloat(x[1]); st.t12 = Date.now(); }
+      if (st.running && st.mon === m && !m.dead) await m.startMasked(TM_ID, '52F');
+    } catch (e) {} st.b12 = false; draw12();
+  }
+  function draw12() {
+    const v = st.v12; if (v == null) { $n('#tm12').textContent = '--'; $n('#tm12s').textContent = st.running ? 'Reading…' : 'Waiting'; return; }
+    const lab = v < 11.8 ? ['Low: weak or discharged', 'var(--red)'] : v < 12.4 ? ['Fair', 'var(--orange-text)'] : v < 15.2 ? ['Normal', 'var(--green)'] : ['High: check charging', 'var(--red)'];
+    $n('#tm12').textContent = v.toFixed(1) + ' V'; const e = $n('#tm12s'); e.textContent = lab[0]; e.style.color = lab[1];
+  }
   async function stop(msg) {
-    st.running = false; clearInterval(st.tick); try { if (st.wake) st.wake.release(); } catch (e) {} st.wake = null;
+    st.running = false; clearInterval(st.tick); clearInterval(st.t12i); clearTimeout(st.t12o); try { if (st.wake) st.wake.release(); } catch (e) {} st.wake = null;
     if (st.mon) { const m = st.mon; st.mon = null; await m.stop(); }
     chip(msg ? 'bad' : '', msg || 'Stopped'); $n('#tmGo').textContent = 'Connect & start'; $n('#tmGo').disabled = false;
   }
@@ -1531,7 +1546,7 @@ function openTeslaMonitor() {
     mon.onFrame = (id, b) => { if (id === TM_BMS) { const e = tmEnergy(b); if (e) { st.en = e; if (st.rem0 == null) st.rem0 = e.rem; } return; } if (id === TM_KWH) { const l = tmLife(b); if (l) st.life = l; return; } if (id !== TM_ID) return; st.frames++; st.lastFrame = Date.now(); st.raw = id + ' ' + b.map(hex2).join(' '); const d = tmDecode(b); if (d && d.v > 150 && d.v < 500) { st.v = d.v; st.a = d.a; } };
     try {
       await mon.open(); chip('busy', 'Starting…'); await mon.startMasked(TM_ID, '52F'); // mask 52F passes 102, 382 and 3D2 (plus a few IDs this car does not use)
-      st.running = true; st.last = Date.now(); st.lastFrame = Date.now(); st.tick = setInterval(tick, 250);
+      st.running = true; st.last = Date.now(); st.lastFrame = Date.now(); st.tick = setInterval(tick, 250); st.t12o = setTimeout(read12, 4000); st.t12i = setInterval(read12, 30000);
       try { if (navigator.wakeLock) st.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
       btn.textContent = 'Stop'; btn.disabled = false; chip('busy', 'Waiting for data…');
     } catch (e) { st.mon = null; try { await mon.stop(); } catch (e2) {} const m = friendlyError(e); chip(m ? 'bad' : '', m ? 'Failed' : 'Not connected'); if (m) $n('#tmRaw').textContent = m; btn.disabled = false; }
@@ -1540,6 +1555,58 @@ function openTeslaMonitor() {
   openSheet('Tesla pack monitor', n, () => { stop(); });
 }
 $('rowTMon').addEventListener('click', openTeslaMonitor);
+
+function openTeslaAlert() {
+  const SUB = { BMS: 'Battery management system (high-voltage pack)', DI: 'Drive inverter / motor', DIF: 'Front drive inverter', DIR: 'Rear drive inverter', DIS: 'Drive inverter', APP: 'Autopilot / driver assistance', VCFRONT: 'Front body controller', VCLEFT: 'Left body controller', VCRIGHT: 'Right body controller', VCSEC: 'Security / key controller', GTW: 'Gateway', CP: 'Charge port', CHG: 'On-board charger', PCS: 'Power conversion (charger/DC-DC)', THC: 'Thermal controller (heating and cooling)', UI: 'Touchscreen / infotainment', EPAS: 'Power steering', ESP: 'Stability / ABS', IBST: 'Brake booster', RCM: 'Airbag / restraints', PM: 'Pyrofuse / power management', HVP: 'High-voltage pack controller', SCCM: 'Steering column module', TAS: 'Air suspension', PTC: 'Cabin heater' };
+  const LEV = { w: 'warning (usually a lower-severity message)', f: 'fault', a: 'alert' };
+  let recent = jsGet('tesla_alerts', []);
+  const n = html(`
+    <p class="foot" style="margin:0 0 10px">On the car: Controls → Service → Service Mode → Service Alerts. Type a code exactly as shown, like BMS_w080. LazScan cannot read these from the car; it only helps you look them up.</p>
+    <div class="card pad stack">
+      <div class="field"><label for="alC">Alert code</label><input id="alC" class="input mono" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="BMS_w080"></div>
+      <div class="field"><label for="alT">Text shown with it (optional)</label><input id="alT" class="input" placeholder="e.g. Battery needs service"></div>
+      <div id="alHint" style="font-size:14px;color:var(--label2)"></div>
+      <a class="btn tint" id="alWeb" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Search this code online</a>
+      <button class="btn" id="alAI">Explain with LazAI</button>
+    </div>
+    <div class="card pad" id="alOut" style="margin-top:10px;display:none"></div>
+    <div class="card" id="alRec" style="margin-top:10px;display:none"></div>
+    <p class="tm-note">LazAI may not know every Tesla-specific code and can be wrong. Treat it as a starting point. The Tessie alert database and Tesla's Service Manual are the authority. Never act on high-voltage warnings by yourself; if the car says to stop driving or a pack warning is active, call Tesla service.</p>`);
+  const $n = (q) => n.querySelector(q);
+  const norm = () => $n('#alC').value.trim().replace(/\s+/g, '_');
+  function parse(c) {
+    const m = c.match(/^([A-Za-z]+)_?([wfaWFA])?_?(\d{1,4})?/); if (!m) return null;
+    const sub = m[1].toUpperCase(); return { sub, desc: SUB[sub], lev: m[2] ? LEV[m[2].toLowerCase()] : null, num: m[3] };
+  }
+  function hint() {
+    const c = norm(); const p = c ? parse(c) : null;
+    $n('#alHint').innerHTML = p ? (p.desc ? `<b>${esc(p.sub)}</b>: ${esc(p.desc)}.` : `Unknown prefix ${esc(p.sub)}.`) + (p.lev ? ` Type: ${esc(p.lev)}.` : '') : '';
+    $n('#alWeb').href = 'https://www.google.com/search?q=' + encodeURIComponent((c || 'Tesla service alert') + ' tesla alert tessie');
+    $n('#alWeb').style.opacity = c ? 1 : .5;
+  }
+  $n('#alC').addEventListener('input', hint); hint();
+  function drawRec() {
+    const box = $n('#alRec'); box.style.display = recent.length ? '' : 'none';
+    box.innerHTML = '<div class="sect" style="margin:12px 16px 0">Recent lookups</div>' + recent.map((r, i) => `<button class="row tap" data-i="${i}"><div class="grow mono">${esc(r.c)}<small style="font-family:inherit">${esc(r.t || '')}</small></div></button>`).join('');
+  }
+  drawRec();
+  $n('#alRec').addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (!b) return; const r = recent[+b.dataset.i]; $n('#alC').value = r.c; $n('#alT').value = r.t || ''; hint(); });
+  $n('#alAI').onclick = async () => {
+    const c = norm(), t = $n('#alT').value.trim(); const out = $n('#alOut');
+    if (!c) { $n('#alC').focus(); return; }
+    if (!getKey()) { out.style.display = ''; out.innerHTML = '<b>Add a Groq key</b><p class="foot">LazAI uses your own free Groq key. Add it in Settings, then try again.</p>'; return; }
+    const btn = $n('#alAI'); btn.disabled = true; btn.textContent = 'Thinking…'; out.style.display = ''; out.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>';
+    recent = [{ c, t }, ...recent.filter((r) => r.c !== c)].slice(0, 12); jsSet('tesla_alerts', recent); drawRec();
+    try {
+      const p = parse(c);
+      const msgs = [{ role: 'system', content: 'You are LazAI inside LazScan. The user owns a 2016 Tesla Model X 75D and is reading a Tesla Service Mode alert code. Explain in plain words: what subsystem it is, what the code most likely means, how serious it is, what the owner can safely check, and when to call Tesla service. IMPORTANT: you may not reliably know Tesla-specific alert codes. If you do not recognise the exact code, say so clearly and explain only what the prefix and wording support, never guess a specific cause. Never suggest bypassing, resetting or discharging the high-voltage system; refer to Tesla service for anything involving the battery pack, contactors, coolant or airbags. Keep it under 200 words, short markdown lists.' }, { role: 'user', content: `Alert code: ${c}\nPrefix meaning (from LazScan table): ${p && p.desc ? p.desc : 'unknown'}\nText shown on screen: ${t || '(not given)'}\nVehicle context: 2016 Model X 75D, ~10 years old.` }];
+      const a = await groqChat(msgs); out.innerHTML = md(a || 'No answer came back. Try again.') + '<p class="foot" style="margin-top:10px">AI answer. Verify with the search link above.</p>';
+    } catch (e) { out.innerHTML = '<span style="color:var(--orange-text)">' + esc(e.message) + '</span>'; }
+    btn.disabled = false; btn.textContent = 'Explain with LazAI';
+  };
+  openSheet('Tesla alert lookup', n);
+}
+$('rowTAlert').addEventListener('click', openTeslaAlert);
 
 function openTeslaEstimate() {
   const bands = [{ min: 92, c: 'var(--green)', t: 'Excellent' }, { min: 86, c: 'var(--blue)', t: 'Good' }, { min: 80, c: 'var(--yellow)', t: 'Fair' }, { min: 0, c: 'var(--red)', t: 'Worn: ask questions' }];
