@@ -198,6 +198,26 @@ button{cursor:pointer;background:none;border:0}
 .foot-legal a{color:inherit}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media (min-width:700px){.tiles{grid-template-columns:repeat(6,1fr)}}
+
+/* tesla tools */
+.tm-gauge{width:100%;max-width:300px;margin:0 auto;display:block}
+.tm-bar{position:relative;height:16px;border-radius:99px;background:var(--sunk);overflow:hidden;margin:10px 0 6px}
+.tm-bar i{position:absolute;top:0;bottom:0;border-radius:0}
+.tm-bar b{position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:var(--label3)}
+.tm-lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--label2)}
+.tm-big{font:700 44px/1 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.tm-note{font-size:13px;color:var(--label2);margin:10px 4px 0}
+.tm-raw{font:12px var(--mono);color:var(--label3);margin-top:8px;overflow-wrap:anywhere}
+.te-band{display:flex;height:10px;border-radius:99px;overflow:hidden;margin:14px 0 4px}
+.te-band span{flex:1}
+.te-mark{position:relative;height:14px}
+.te-mark i{position:absolute;top:0;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:10px solid var(--label);transform:translateX(-50%)}
+.te-lab{position:relative;height:16px;font-size:11px;color:var(--label3);margin-bottom:2px}.te-lab span{position:absolute;transform:translateX(-50%)}.te-lab span:first-child{transform:none}.te-lab span:last-child{transform:translateX(-100%)}
+.te-in{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.te-in .field{flex-direction:column;align-items:stretch;gap:6px}
+.te-in .field label{font-size:13px;color:var(--label2);font-weight:500}
+.te-in .field input{background:var(--sunk);text-align:left;border-radius:10px;padding:11px 12px}
+.te-in .field.full{grid-column:1/-1}
 </style>
 </head>
 <body>
@@ -340,8 +360,14 @@ button{cursor:pointer;background:none;border:0}
   <div class="card">
     <button class="row tap" id="rowReport"><div class="grow">Diagnostic report<small>Save or print a PDF of codes and live data</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowNotes"><div class="grow">Dev notes<small>Ideas, bugs and feature requests</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
-    <button class="row tap" id="rowProbe"><div class="grow">Tesla CAN probe (beta)<small>Test whether your adapter can listen to a Tesla's battery bus. Read-only.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowInstall" hidden><div class="grow">Install app<small>Add LazScan to your home screen</small></div></button>
+  </div>
+
+  <div class="sect">Tesla (beta)</div>
+  <div class="card">
+    <button class="row tap" id="rowTMon"><div class="grow">Pack monitor<small>Live pack voltage, current and power. Needs a Tesla diagnostic cable.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowTEst"><div class="grow">Used Tesla battery estimate<small>Estimate health from the range and % on any Tesla's screen. No adapter needed.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowProbe"><div class="grow">CAN probe<small>Check which messages your adapter can hear on a Tesla. Read-only.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
   </div>
 
   <div class="sect">About</div>
@@ -377,7 +403,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.1.1'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.2.0'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1229,6 +1255,7 @@ async function runCanProbe(ids, secs, out) {
   t.onData = (x) => { rx += x; };
   await t.connect();
   log('Adapter: ' + t.name + '  (' + (t.used || '?') + ')');
+  try { await t.write('\r'); } catch (e) {} await sleep(400); rx = ''; // stop any monitor left running by an earlier session
   const waitPrompt = (ms) => new Promise((res) => {
     const t0 = Date.now();
     const iv = setInterval(() => {
@@ -1315,6 +1342,184 @@ $('rowProbe').addEventListener('click', () => {
   n.querySelector('#pbCopy').onclick = async () => { try { await navigator.clipboard.writeText(out.value); toast('Copied', 'ok'); } catch (e) { out.select(); toast('Select and copy the text'); } };
   openSheet('Tesla CAN probe', n);
 });
+
+// ============================================================
+//  TESLA: LIVE PACK MONITOR (beta) + USED-TESLA ESTIMATE
+//  The monitor only listens to CAN message 0x102. The decode below is UNVERIFIED:
+//  bytes 0-1 = pack voltage (x0.01 V), bytes 2-3 = smoothed current (signed, x0.1 A).
+// ============================================================
+const TM_ID = '102', TM_FRAME = /^([0-9A-F]{3})((?: [0-9A-F]{2}){1,8})$/;
+class CanMonitor {
+  constructor() { this.t = null; this.rx = ''; this.pend = ''; this.mon = false; this.dead = false; this.onFrame = () => {}; this.onEnd = () => {}; }
+  _data(x) {
+    if (!this.mon) { this.rx += x; return; }
+    this.pend += x; const lines = this.pend.split(/[\r\n]+/); this.pend = lines.pop();
+    for (const ln of lines) { const m = ln.replace(/>/g, '').trim().match(TM_FRAME); if (m) this.onFrame(m[1], m[2].trim().split(' ').map((h) => parseInt(h, 16))); }
+  }
+  async cmd(c, ms = 3000) {
+    this.rx = ''; await this.t.write(c + '\r');
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms && !this.dead) { const i = this.rx.indexOf('>'); if (i >= 0) { const o = this.rx.slice(0, i); this.rx = ''; return o.replace(/[\r\n]+/g, ' ').trim(); } await sleep(40); }
+    return '';
+  }
+  async open() {
+    const t = this.t = new BleTransport();
+    t.onClose = () => { this.dead = true; if (this.mon) { this.mon = false; this.onEnd('Adapter disconnected'); } };
+    t.onData = (x) => this._data(x);
+    await t.connect(); this.name = t.name;
+    try { await t.write('\r'); } catch (e) {} await sleep(400); this.rx = '';
+    await this.cmd('ATZ', 5000);
+    for (const c of ['ATE0', 'ATL0', 'ATS1', 'ATH1', 'ATD0', 'ATCAF0', 'ATSP6']) await this.cmd(c);
+  }
+  async start(id) {
+    for (const c of ['ATCRA ' + id, 'ATCM 7FF', 'ATCF ' + id]) await this.cmd(c);
+    this.pend = ''; this.mon = true; await this.t.write('ATMA\r');
+  }
+  async stop() {
+    const was = this.mon; this.mon = false;
+    if (this.t) { try { if (was) await this.t.write('\r'); } catch (e) {} await sleep(250); this.t.close(); }
+  }
+}
+const tmDecode = (b) => (b.length < 4 ? null : { v: (b[0] | (b[1] << 8)) / 100, a: (((b[2] | (b[3] << 8)) << 16) >> 16) / 10 });
+const polar = (cx, cy, r, deg) => [cx + r * Math.cos((deg - 90) * Math.PI / 180), cy + r * Math.sin((deg - 90) * Math.PI / 180)];
+const arcPath = (cx, cy, r, a0, a1) => { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${x0.toFixed(1)} ${y0.toFixed(1)}A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`; };
+
+function openTeslaMonitor() {
+  if (S.transport) { teardown(); setMode('idle'); }
+  const VMIN = 250, VMAX = 400;
+  const st = { v: null, a: null, raw: '', hist: [], acc: { v: 0, p: 0, n: 0 }, whIn: 0, whOut: 0, last: 0, lastFrame: 0, frames: 0, running: false, tick: null, mon: null };
+  let cells = +lsGet('tesla_cells', '84'), chargePos = lsGet('tesla_sign', 'pos') === 'pos';
+  const n = html(`
+    <div style="display:flex;justify-content:space-between;align-items:center"><span class="chip" id="tmChip"><i></i><span id="tmChipT">Not connected</span></span><span class="mono" style="font-size:13px;color:var(--label2)" id="tmRate"></span></div>
+    <div class="card pad" style="margin-top:10px;text-align:center"><svg class="tm-gauge" id="tmGauge" viewBox="0 0 220 160" role="img" aria-label="Pack voltage gauge"></svg></div>
+    <div class="card" style="margin-top:10px"><div class="tiles">
+      <div class="tile"><div class="v" id="tmA">--</div><div class="u">amps</div><div class="l">Current</div></div>
+      <div class="tile"><div class="v" id="tmP">--</div><div class="u">kW</div><div class="l">Power</div></div>
+      <div class="tile"><div class="v" id="tmC">--</div><div class="u">volts</div><div class="l">Per cell</div></div>
+    </div>
+    <div style="padding:0 16px 14px"><div class="tm-bar"><i id="tmFill"></i><b></b></div><div class="tm-lbl"><span>Using power</span><span id="tmDir" style="font-weight:600;color:var(--label)">Idle</span><span>Charging</span></div></div></div>
+    <div class="card pad" style="margin-top:10px"><div class="sect" style="margin:0 0 6px">Last 3 minutes</div><svg id="tmChart" viewBox="0 0 300 110" style="width:100%;height:110px;display:block"></svg>
+      <div class="legend"><span><i style="background:var(--blue)"></i>Pack voltage</span><span><i style="background:var(--orange)"></i>Power</span></div></div>
+    <div class="card" style="margin-top:10px"><div class="vgrid"><div><span>Energy in</span><b id="tmIn">0 Wh</b></div><div><span>Energy out</span><b id="tmOut">0 Wh</b></div></div></div>
+    <div class="card pad stack" style="margin-top:10px">
+      <div class="field"><label for="tmCells">Pack type</label><select id="tmCells"><option value="84">84 cells (70/75 kWh)</option><option value="96">96 cells (85/90/100)</option></select></div>
+      <div class="seg" id="tmSign" role="group" aria-label="Current direction"><button data-v="pos" aria-pressed="true">Charging is +</button><button data-v="neg" aria-pressed="false">Charging is −</button></div>
+      <button class="btn" id="tmGo">Connect &amp; start</button>
+    </div>
+    <p class="tm-note">Beta. The decode of message 0x102 is a best guess: if power looks backwards, flip the direction switch. Check voltage against another source before relying on it. Read-only; nothing is sent to the car.</p>
+    <div class="tm-raw" id="tmRaw"></div>`);
+  const $n = (q) => n.querySelector(q);
+  $n('#tmCells').value = String(cells);
+  const syncSeg = () => $n('#tmSign').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === 'pos') === chargePos)));
+  syncSeg();
+  $n('#tmCells').onchange = (e) => { cells = +e.target.value; lsSet('tesla_cells', String(cells)); draw(); };
+  $n('#tmSign').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; chargePos = b.dataset.v === 'pos'; lsSet('tesla_sign', b.dataset.v); syncSeg(); st.hist.forEach((h) => (h.p = h.v * h.a * (chargePos ? 1 : -1) / 1000)); draw(); };
+  const chip = (cls, text) => { $n('#tmChip').className = 'chip ' + cls; $n('#tmChipT').textContent = text; };
+  const pwr = () => (st.v == null || st.a == null ? null : st.v * st.a * (chargePos ? 1 : -1) / 1000);
+
+  function drawChart() {
+    const h = st.hist; if (h.length < 2) { $n('#tmChart').innerHTML = `<text x="150" y="58" text-anchor="middle" fill="var(--label3)" font-size="12">Waiting for data…</text>`; return; }
+    const line = (key, lo, hi, color) => { const pts = h.map((d, i) => `${(i / Math.max(59, h.length - 1) * 300).toFixed(1)},${(104 - (Math.min(hi, Math.max(lo, d[key])) - lo) / (hi - lo) * 98).toFixed(1)}`).join(' '); return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`; };
+    const vs = h.map((d) => d.v), ps = h.map((d) => d.p);
+    const vlo = Math.floor(Math.min(...vs) - 1), vhi = Math.max(vlo + 4, Math.ceil(Math.max(...vs) + 1));
+    const pm = Math.max(5, Math.ceil(Math.max(...ps.map(Math.abs)) / 5) * 5);
+    $n('#tmChart').innerHTML = `<line x1="0" x2="300" y1="55" y2="55" stroke="var(--sep)" stroke-dasharray="3 4"/>` + line('v', vlo, vhi, 'var(--blue)') + line('p', -pm, pm, 'var(--orange)') +
+      `<text x="2" y="10" font-size="9" fill="var(--label3)">${vhi} V · +${pm} kW</text><text x="2" y="108" font-size="9" fill="var(--label3)">${vlo} V · -${pm} kW</text>`;
+  }
+  function draw() {
+    const v = st.v, a = st.a, p = pwr();
+    const f = v == null ? 0 : Math.min(1, Math.max(0, (v - VMIN) / (VMAX - VMIN)));
+    const [tx, ty] = polar(110, 110, 84, -120 + 240 * f);
+    $n('#tmGauge').innerHTML = `<path d="${arcPath(110, 110, 84, -120, 120)}" fill="none" stroke="var(--sunk)" stroke-width="16" stroke-linecap="round"/>` +
+      (v == null ? '' : `<path d="${arcPath(110, 110, 84, -120, -120 + Math.max(2, 240 * f))}" fill="none" stroke="var(--blue)" stroke-width="16" stroke-linecap="round"/><circle cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="5" fill="var(--elev)"/>`) +
+      `<text x="110" y="108" text-anchor="middle" font-family="var(--mono)" font-weight="700" font-size="40" fill="var(--label)">${v == null ? '--' : v.toFixed(1)}</text>` +
+      `<text x="110" y="128" text-anchor="middle" font-size="13" fill="var(--label2)">pack volts</text>` +
+      `<text x="30" y="154" text-anchor="middle" font-size="11" fill="var(--label3)">${VMIN}</text><text x="190" y="154" text-anchor="middle" font-size="11" fill="var(--label3)">${VMAX}</text>`;
+    $n('#tmA').textContent = a == null ? '--' : (a * (chargePos ? 1 : -1)).toFixed(1);
+    $n('#tmP').textContent = p == null ? '--' : p.toFixed(1);
+    $n('#tmC').textContent = v == null ? '--' : (v / cells).toFixed(3);
+    const fill = $n('#tmFill'), lim = Math.max(10, Math.ceil(Math.abs(p || 0) / 10) * 10), w = p == null ? 0 : Math.min(50, Math.abs(p) / lim * 50);
+    fill.style.cssText = p == null || Math.abs(p) < 0.15 ? 'display:none' : (p > 0 ? `left:50%;width:${w}%;background:var(--green)` : `right:50%;width:${w}%;background:var(--orange)`);
+    $n('#tmDir').textContent = p == null ? 'Idle' : Math.abs(p) < 0.15 ? 'Idle' : (p > 0 ? 'Charging ' : 'Using ') + Math.abs(p).toFixed(1) + ' kW';
+    $n('#tmIn').textContent = Math.round(st.whIn) + ' Wh'; $n('#tmOut').textContent = Math.round(st.whOut) + ' Wh';
+    $n('#tmRaw').textContent = st.raw ? 'Last frame: ' + st.raw : '';
+    drawChart();
+  }
+  let sec = 0;
+  function tick() {
+    const now = Date.now(), p = pwr();
+    if (p != null && st.last) { const wh = p * 1000 * ((now - st.last) / 3600000); if (wh > 0) st.whIn += wh; else st.whOut -= wh; }
+    st.last = now; sec += 0.25;
+    if (sec >= 1 && st.v != null) { sec = 0; st.hist.push({ v: st.v, a: st.a, p }); if (st.hist.length > 180) st.hist.shift(); }
+    $n('#tmRate').textContent = st.running ? st.frames + ' frames' : '';
+    if (st.running && st.lastFrame && now - st.lastFrame > 6000) chip('bad', 'No data. Wake the car'); else if (st.running && st.frames) chip('ok', 'Live');
+    draw();
+  }
+  async function stop(msg) {
+    st.running = false; clearInterval(st.tick); try { if (st.wake) st.wake.release(); } catch (e) {} st.wake = null;
+    if (st.mon) { const m = st.mon; st.mon = null; await m.stop(); }
+    chip(msg ? 'bad' : '', msg || 'Stopped'); $n('#tmGo').textContent = 'Connect & start'; $n('#tmGo').disabled = false;
+  }
+  $n('#tmGo').onclick = async () => {
+    if (st.running) { await stop(); return; }
+    if (!navigator.bluetooth) { chip('bad', 'No Web Bluetooth'); return; }
+    const mon = st.mon = new CanMonitor(); const btn = $n('#tmGo'); btn.disabled = true; chip('busy', 'Connecting…');
+    mon.onEnd = (m) => stop(m);
+    mon.onFrame = (id, b) => { if (id !== TM_ID) return; st.frames++; st.lastFrame = Date.now(); st.raw = id + ' ' + b.map(hex2).join(' '); const d = tmDecode(b); if (d && d.v > 150 && d.v < 500) { st.v = d.v; st.a = d.a; } };
+    try {
+      await mon.open(); chip('busy', 'Starting…'); await mon.start(TM_ID);
+      st.running = true; st.last = Date.now(); st.lastFrame = Date.now(); st.tick = setInterval(tick, 250);
+      try { if (navigator.wakeLock) st.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+      btn.textContent = 'Stop'; btn.disabled = false; chip('busy', 'Waiting for data…');
+    } catch (e) { st.mon = null; try { await mon.stop(); } catch (e2) {} const m = friendlyError(e); chip(m ? 'bad' : '', m ? 'Failed' : 'Not connected'); if (m) $n('#tmRaw').textContent = m; btn.disabled = false; }
+  };
+  draw();
+  openSheet('Tesla pack monitor', n, () => { stop(); });
+}
+$('rowTMon').addEventListener('click', openTeslaMonitor);
+
+function openTeslaEstimate() {
+  const bands = [{ min: 92, c: 'var(--green)', t: 'Excellent' }, { min: 86, c: 'var(--blue)', t: 'Good' }, { min: 80, c: 'var(--yellow)', t: 'Fair' }, { min: 0, c: 'var(--red)', t: 'Worn: ask questions' }];
+  const n = html(`
+    <p style="color:var(--label2);margin:4px 0 12px">Read three numbers off the car's screen. For best accuracy, use a charge of 80% or more, a warm battery, and the same distance unit for both ranges.</p>
+    <div class="card pad"><div class="te-in">
+      <div class="field full"><label for="teLabel">Label (optional)</label><input id="teLabel" class="input" placeholder="2018 Model 3 LR, red" autocomplete="off"></div>
+      <div class="field"><label for="teOrig">Range when new</label><input id="teOrig" class="input" inputmode="decimal" placeholder="237"></div>
+      <div class="field"><label for="teCur">Range shown now</label><input id="teCur" class="input" inputmode="decimal" placeholder="205"></div>
+      <div class="field full"><label for="tePct">Battery % shown</label><input id="tePct" class="input" inputmode="decimal" placeholder="100"></div>
+    </div></div>
+    <div class="card pad" id="teRes" style="margin-top:12px;text-align:center"><div class="empty" style="padding:14px"><b>Enter the three numbers</b>The estimate appears here.</div></div>
+    <div class="stack" style="margin-top:12px"><button class="btn tint" id="teSave" disabled>Save to compare</button></div>
+    <div class="sect">Saved</div><div class="card" id="teList"></div>
+    <p class="tm-note">Range when new is the original rated range for that exact trim and year (the window sticker or fueleconomy.gov has it). This estimates range loss, not an official battery test. Software updates can change the rated range shown, so treat it as a screening number. Tesla's battery warranty covers capacity down to a minimum level for a set term; check the car's own terms.</p>`);
+  const $n = (q) => n.querySelector(q);
+  let cur = null;
+  const num = (id) => parseFloat(String($n(id).value).replace(',', '.'));
+  const calc = () => {
+    const o = num('#teOrig'), c = num('#teCur'), p = num('#tePct');
+    $n('#teSave').disabled = true; cur = null;
+    if (!(o > 0 && c > 0 && p > 0 && p <= 100)) { $n('#teRes').innerHTML = '<div class="empty" style="padding:14px"><b>Enter the three numbers</b>The estimate appears here.</div>'; return; }
+    const full = c / (p / 100), h = full / o * 100, band = bands.find((b) => h >= b.min), pos = Math.max(0, Math.min(100, (h - 60) / 50 * 100));
+    const warn = p < 50 ? 'Low charge makes this less accurate. Re-check at 80% or more.' : h > 102 ? 'Reads above new. Re-check the original range and units.' : '';
+    cur = { label: $n('#teLabel').value.trim(), orig: o, cur: c, pct: p, health: Math.round(h * 10) / 10, full: Math.round(full) };
+    $n('#teRes').innerHTML = `<div class="tm-big" style="color:${band.c}">${h.toFixed(0)}%</div><div style="font-weight:600;margin-top:4px">${band.t}</div>
+      <div style="color:var(--label2);font-size:14px;margin-top:2px">About ${Math.round(full)} at 100%, down ${Math.max(0, Math.round(o - full))} from ${o} (${Math.max(0, 100 - h).toFixed(0)}% loss)</div>
+      <div class="te-band"><span style="flex:40;background:var(--red)"></span><span style="flex:12;background:var(--yellow)"></span><span style="flex:12;background:var(--blue)"></span><span style="flex:36;background:var(--green)"></span></div>
+      <div class="te-mark"><i style="left:${pos}%"></i></div><div class="te-lab"><span style="left:0%">60</span><span style="left:40%">80</span><span style="left:52%">86</span><span style="left:64%">92</span><span style="left:100%">110</span></div>
+      ${warn ? `<div class="banner" style="margin:12px 0 0;text-align:left">${I.warn}<div>${esc(warn)}</div></div>` : ''}`;
+    $n('#teSave').disabled = false;
+  };
+  const list = () => {
+    const a = jsGet('tesla_est', []);
+    $n('#teList').innerHTML = a.length ? a.map((x, i) => `<div class="row"><div class="grow">${esc(x.label || 'Unnamed Tesla')}<small>${x.cur} of ${x.orig} at ${x.pct}% · about ${x.full} at 100%</small></div><b style="font-size:19px">${x.health.toFixed(0)}%</b><button class="link" data-del="${i}" aria-label="Delete">✕</button></div>`).join('') : '<div class="empty" style="padding:18px"><b>Nothing saved yet</b>Save each car you check to compare them.</div>';
+  };
+  ['#teLabel', '#teOrig', '#teCur', '#tePct'].forEach((q) => $n(q).addEventListener('input', calc));
+  $n('#teSave').onclick = () => { if (!cur) return; const a = jsGet('tesla_est', []); a.unshift(cur); jsSet('tesla_est', a.slice(0, 30)); list(); toast('Saved', 'ok'); };
+  $n('#teList').addEventListener('click', (e) => { const d = e.target.closest('[data-del]'); if (!d) return; const a = jsGet('tesla_est', []); a.splice(+d.dataset.del, 1); jsSet('tesla_est', a); list(); });
+  list(); openSheet('Used Tesla battery estimate', n);
+}
+$('rowTEst').addEventListener('click', openTeslaEstimate);
+
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('rowInstall').hidden = false; });
 window.addEventListener('appinstalled', () => { installEvt = null; $('rowInstall').hidden = true; toast('Installed', 'ok'); });
