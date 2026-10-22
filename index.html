@@ -209,7 +209,7 @@ button{cursor:pointer;background:none;border:0}
 .tm-note{font-size:13px;color:var(--label2);margin:10px 4px 0}
 .tm-raw{font:12px var(--mono);color:var(--label3);margin-top:8px;overflow-wrap:anywhere}
 .te-band{display:flex;height:10px;border-radius:99px;overflow:hidden;margin:14px 0 4px}
-.te-band span{flex:1}
+.te-band span{flex:1}.te-band{position:relative}.te-tick{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--label)}
 .te-mark{position:relative;height:14px}
 .te-mark i{position:absolute;top:0;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:10px solid var(--label);transform:translateX(-50%)}
 .te-lab{position:relative;height:16px;font-size:11px;color:var(--label3);margin-bottom:2px}.te-lab span{position:absolute;transform:translateX(-50%)}.te-lab span:first-child{transform:none}.te-lab span:last-child{transform:translateX(-100%)}
@@ -367,6 +367,7 @@ button{cursor:pointer;background:none;border:0}
   <div class="card">
     <button class="row tap" id="rowTMon"><div class="grow">Pack monitor<small>Live pack voltage, current and power. Needs a Tesla diagnostic cable.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowTEst"><div class="grow">Used Tesla battery estimate<small>Estimate health from the range and % on any Tesla's screen. No adapter needed.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
+    <button class="row tap" id="rowLog"><div class="grow">CAN logger<small>Capture every message the car sends (about 4 min) to find the battery capacity message.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
     <button class="row tap" id="rowProbe"><div class="grow">CAN probe<small>Check which messages your adapter can hear on a Tesla. Read-only.</small></div><svg class="chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l6 6-6 6"/></svg></button>
   </div>
 
@@ -403,7 +404,7 @@ button{cursor:pointer;background:none;border:0}
 //  LazScan — app logic
 //  Single file: ELM327 engine, UI, Groq, NHTSA, NFC.
 // ============================================================
-const VERSION = 'v2.2.0'; // keep in sync with CACHE_NAME in sw.js
+const VERSION = 'v2.3.0'; // keep in sync with CACHE_NAME in sw.js
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1375,6 +1376,16 @@ class CanMonitor {
     for (const c of ['ATCRA ' + id, 'ATCM 7FF', 'ATCF ' + id]) await this.cmd(c);
     this.pend = ''; this.mon = true; await this.t.write('ATMA\r');
   }
+  async startMasked(filter, mask) {
+    for (const c of ['ATCM ' + mask, 'ATCF ' + filter]) await this.cmd(c);
+    this.pend = ''; this.mon = true; await this.t.write('ATMA\r');
+  }
+  async halt() { // stop monitoring but keep the connection open
+    this.mon = false; this.rx = '';
+    try { await this.t.write('\r'); } catch (e) { return; }
+    const t0 = Date.now(); while (Date.now() - t0 < 1500 && !this.dead && !this.rx.includes('>')) await sleep(30);
+    this.rx = '';
+  }
   async stop() {
     const was = this.mon; this.mon = false;
     if (this.t) { try { if (was) await this.t.write('\r'); } catch (e) {} await sleep(250); this.t.close(); }
@@ -1402,6 +1413,16 @@ function openTeslaMonitor() {
       <div class="legend"><span><i style="background:var(--blue)"></i>Pack voltage</span><span><i style="background:var(--orange)"></i>Power</span></div></div>
     <div class="card" style="margin-top:10px"><div class="vgrid"><div><span>Energy in</span><b id="tmIn">0 Wh</b></div><div><span>Energy out</span><b id="tmOut">0 Wh</b></div></div></div>
     <div class="card pad stack" style="margin-top:10px">
+      <div class="sect" style="margin:0">Capacity from this charge</div>
+      <p style="font-size:13px;color:var(--label2)">Start the monitor, note the battery % on the car's screen, then charge. Enter both percentages. A bigger span gives a better result.</p>
+      <div class="te-in">
+        <div class="field"><label for="tmS">% at start</label><input id="tmS" class="input" inputmode="decimal" placeholder="40"></div>
+        <div class="field"><label for="tmE">% now</label><input id="tmE" class="input" inputmode="decimal" placeholder="80"></div>
+        <div class="field full"><label for="tmN">Capacity when new (kWh)</label><input id="tmN" class="input" inputmode="decimal" placeholder="71.8"></div>
+      </div>
+      <div id="tmCap" style="text-align:center;padding:4px 0"></div>
+    </div>
+    <div class="card pad stack" style="margin-top:10px">
       <div class="field"><label for="tmCells">Pack type</label><select id="tmCells"><option value="84">84 cells (70/75 kWh)</option><option value="96">96 cells (85/90/100)</option></select></div>
       <div class="seg" id="tmSign" role="group" aria-label="Current direction"><button data-v="pos" aria-pressed="true">Charging is +</button><button data-v="neg" aria-pressed="false">Charging is −</button></div>
       <button class="btn" id="tmGo">Connect &amp; start</button>
@@ -1409,7 +1430,8 @@ function openTeslaMonitor() {
     <p class="tm-note">Beta. The decode of message 0x102 is a best guess: if power looks backwards, flip the direction switch. Check voltage against another source before relying on it. Read-only; nothing is sent to the car.</p>
     <div class="tm-raw" id="tmRaw"></div>`);
   const $n = (q) => n.querySelector(q);
-  $n('#tmCells').value = String(cells);
+  $n('#tmCells').value = String(cells); $n('#tmN').value = lsGet('tesla_new', '');
+  $n('#tmN').addEventListener('input', () => lsSet('tesla_new', $n('#tmN').value));
   const syncSeg = () => $n('#tmSign').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === 'pos') === chargePos)));
   syncSeg();
   $n('#tmCells').onchange = (e) => { cells = +e.target.value; lsSet('tesla_cells', String(cells)); draw(); };
@@ -1443,8 +1465,24 @@ function openTeslaMonitor() {
     $n('#tmDir').textContent = p == null ? 'Idle' : Math.abs(p) < 0.15 ? 'Idle' : (p > 0 ? 'Charging ' : 'Using ') + Math.abs(p).toFixed(1) + ' kW';
     $n('#tmIn').textContent = Math.round(st.whIn) + ' Wh'; $n('#tmOut').textContent = Math.round(st.whOut) + ' Wh';
     $n('#tmRaw').textContent = st.raw ? 'Last frame: ' + st.raw : '';
+    capCalc();
     drawChart();
   }
+  function capCalc() {
+    const box = $n('#tmCap'), a = parseFloat($n('#tmS').value), b = parseFloat($n('#tmE').value), nw = parseFloat(String($n('#tmN').value).replace(',', '.'));
+    const net = (st.whIn - st.whOut) / 1000; // kWh at the pack, charging positive
+    if (!(a >= 0 && b >= 0 && a <= 100 && b <= 100) || a === b) { box.innerHTML = '<span style="color:var(--label3);font-size:14px">Enter both percentages to see the estimate.</span>'; return; }
+    const d = b - a, cap = net / (d / 100), pm = Math.round(100 / Math.abs(d));
+    let warn = '';
+    if (Math.abs(net) < 0.3) warn = 'Not enough energy measured yet. Keep charging with the monitor running.';
+    else if (cap < 0) warn = 'Direction mismatch: flip the "Charging is +/−" switch.';
+    else if (cap < 20 || cap > 130) warn = 'This looks wrong for a Tesla pack, so the current decode may be off.';
+    else if (Math.abs(d) < 10) warn = 'Under 10 points of charge: very rough. Charge further for a better number.';
+    if (warn && (Math.abs(net) < 0.3 || cap < 0 || cap < 20 || cap > 130)) { box.innerHTML = `<span style="color:var(--orange-text);font-size:14px">${esc(warn)}</span><div class="mono" style="font-size:12px;color:var(--label3);margin-top:4px">${net.toFixed(2)} kWh over ${d} points</div>`; return; }
+    const h = nw > 0 ? cap / nw * 100 : null;
+    box.innerHTML = `<div class="tm-big">${cap.toFixed(1)}<span style="font-size:18px"> kWh</span></div><div style="color:var(--label2);font-size:14px;margin-top:4px">usable capacity, about ±${pm}%</div>` + (h ? `<div style="font-weight:600;margin-top:6px">${h.toFixed(0)}% of new (${nw} kWh)</div>` : '<div style="color:var(--label3);font-size:13px;margin-top:6px">Add the new capacity to get a health percentage.</div>') + (warn ? `<div style="color:var(--orange-text);font-size:13px;margin-top:6px">${esc(warn)}</div>` : '');
+  }
+  ['#tmS', '#tmE', '#tmN'].forEach((q) => $n(q).addEventListener('input', capCalc));
   let sec = 0;
   function tick() {
     const now = Date.now(), p = pwr();
@@ -1491,7 +1529,7 @@ function openTeslaEstimate() {
     <div class="card pad" id="teRes" style="margin-top:12px;text-align:center"><div class="empty" style="padding:14px"><b>Enter the three numbers</b>The estimate appears here.</div></div>
     <div class="stack" style="margin-top:12px"><button class="btn tint" id="teSave" disabled>Save to compare</button></div>
     <div class="sect">Saved</div><div class="card" id="teList"></div>
-    <p class="tm-note">Range when new is the original rated range for that exact trim and year (the window sticker or fueleconomy.gov has it). This estimates range loss, not an official battery test. Software updates can change the rated range shown, so treat it as a screening number. Tesla's battery warranty covers capacity down to a minimum level for a set term; check the car's own terms.</p>`);
+    <p class="tm-note">Range when new is the original rated range for that exact trim, year and wheel size (the window sticker or fueleconomy.gov has it). Different wheels change the range the car shows. This estimates range loss, not an official battery test. Software updates can change the rated range shown, so treat it as a screening number. Tesla's battery warranty covers capacity down to a minimum level for a set term; check the car's own terms.</p>`);
   const $n = (q) => n.querySelector(q);
   let cur = null;
   const num = (id) => parseFloat(String($n(id).value).replace(',', '.'));
@@ -1504,8 +1542,9 @@ function openTeslaEstimate() {
     cur = { label: $n('#teLabel').value.trim(), orig: o, cur: c, pct: p, health: Math.round(h * 10) / 10, full: Math.round(full) };
     $n('#teRes').innerHTML = `<div class="tm-big" style="color:${band.c}">${h.toFixed(0)}%</div><div style="font-weight:600;margin-top:4px">${band.t}</div>
       <div style="color:var(--label2);font-size:14px;margin-top:2px">About ${Math.round(full)} at 100%, down ${Math.max(0, Math.round(o - full))} from ${o} (${Math.max(0, 100 - h).toFixed(0)}% loss)</div>
-      <div class="te-band"><span style="flex:40;background:var(--red)"></span><span style="flex:12;background:var(--yellow)"></span><span style="flex:12;background:var(--blue)"></span><span style="flex:36;background:var(--green)"></span></div>
-      <div class="te-mark"><i style="left:${pos}%"></i></div><div class="te-lab"><span style="left:0%">60</span><span style="left:40%">80</span><span style="left:52%">86</span><span style="left:64%">92</span><span style="left:100%">110</span></div>
+      <div class="te-band"><span style="flex:40;background:var(--red)"></span><span style="flex:12;background:var(--yellow)"></span><span style="flex:12;background:var(--blue)"></span><span style="flex:36;background:var(--green)"></span><b class="te-tick" style="left:20%"></b></div>
+      <div class="te-mark"><i style="left:${pos}%"></i></div><div class="te-lab"><span style="left:0%">60</span><span style="left:20%">70</span><span style="left:40%">80</span><span style="left:52%">86</span><span style="left:64%">92</span><span style="left:100%">110</span></div>
+      <div style="font-size:13px;margin-top:10px;color:${h >= 70 ? 'var(--label2)' : 'var(--red)'}">${h >= 70 ? 'Above' : 'Below'} Tesla's 70% warranty floor (the black tick). Check the car's own warranty term.</div>
       ${warn ? `<div class="banner" style="margin:12px 0 0;text-align:left">${I.warn}<div>${esc(warn)}</div></div>` : ''}`;
     $n('#teSave').disabled = false;
   };
@@ -1519,6 +1558,79 @@ function openTeslaEstimate() {
   list(); openSheet('Used Tesla battery estimate', n);
 }
 $('rowTEst').addEventListener('click', openTeslaEstimate);
+
+
+// ============================================================
+//  CAN LOGGER (beta, read-only): sweeps the 11-bit ID space, then records each ID that talks.
+// ============================================================
+function openCanLogger() {
+  if (S.transport) { teardown(); setMode('idle'); }
+  const n = html(`<p style="color:var(--label2);margin:4px 0 12px">Plug the adapter into the Tesla cable and wake the car. Keep the screen on. Run this once now and again after the battery % changes (for example, 10 minutes into a charge). Read-only.</p>
+    <div class="card pad stack">
+      <div class="te-in">
+        <div class="field"><label for="lgPct">Battery % on screen</label><input id="lgPct" class="input" inputmode="decimal" placeholder="75"></div>
+        <div class="field"><label for="lgSpd">Sweep</label><select id="lgSpd" class="input"><option value="0.8">Quick (~3 min)</option><option value="1.8">Thorough (~6 min)</option></select></div>
+        <div class="field full"><label for="lgNote">Notes (charging? parked? doors?)</label><input id="lgNote" class="input" placeholder="charging at home, 32 A"></div>
+      </div>
+      <button class="btn" id="lgGo">Start logging</button>
+      <div class="tm-bar" style="margin:0"><i id="lgBar" style="left:0;width:0;background:var(--blue)"></i></div>
+      <div id="lgStat" style="font-size:14px;color:var(--label2)">Ready.</div>
+    </div>
+    <textarea id="lgOut" class="input mono" rows="12" readonly style="margin-top:12px;font-size:11px;width:100%" placeholder="The log appears here."></textarea>
+    <div class="two" style="margin-top:10px"><button class="btn tint" id="lgCopy">Copy log</button><button class="btn tint" id="lgSave">Save file</button></div>
+    <p class="tm-note">Slow messages can be missed in the quick sweep. If a log looks thin, run Thorough.</p>`);
+  const $n = (q) => n.querySelector(q);
+  let cancel = false, running = false, mon = null;
+  const h3 = (v) => v.toString(16).toUpperCase().padStart(3, '0');
+  const setBar = (f, t) => { $n('#lgBar').style.width = Math.round(f * 100) + '%'; $n('#lgStat').textContent = t; };
+  async function run() {
+    if (running) { cancel = true; $n('#lgStat').textContent = 'Stopping…'; return; }
+    if (!navigator.bluetooth) { $n('#lgStat').textContent = 'This browser cannot use Web Bluetooth.'; return; }
+    running = true; cancel = false; const btn = $n('#lgGo'); btn.textContent = 'Stop'; $n('#lgOut').value = '';
+    const sweepSec = parseFloat($n('#lgSpd').value), t00 = Date.now(); let wake = null;
+    mon = new CanMonitor(); mon.onEnd = () => { cancel = true; };
+    let cur = null; mon.onFrame = (id, b) => { if (cur) cur(id, b); };
+    try {
+      setBar(0, 'Connecting…'); await mon.open();
+      try { if (navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+      // 1) sweep every 16-ID block
+      const seen = {};
+      for (let p = 0; p < 128 && !cancel; p++) {
+        setBar(p / 128 * 0.5, 'Sweeping IDs ' + h3(p * 16) + '–' + h3(p * 16 + 15) + ' · found ' + Object.keys(seen).length);
+        cur = (id) => { seen[id] = (seen[id] || 0) + 1; };
+        await mon.startMasked(h3(p * 16), '7F0'); await sleep(sweepSec * 1000); await mon.halt();
+      }
+      cur = null;
+      const ids = Object.keys(seen).sort();
+      // 2) dwell on each ID
+      const data = {};
+      for (let i = 0; i < ids.length && !cancel; i++) {
+        const id = ids[i], secs = (seen[id] <= 3 ? 5 : 2.5), fr = [], t0 = Date.now();
+        setBar(0.5 + i / Math.max(1, ids.length) * 0.5, 'Recording ' + id + ' (' + (i + 1) + ' of ' + ids.length + ')');
+        cur = (fid, b) => { if (fid === id && fr.length < 400) fr.push([Date.now() - t0, b]); };
+        await mon.startMasked(id, '7FF'); await sleep(secs * 1000); await mon.halt(); cur = null;
+        data[id] = { fr, secs: (Date.now() - t0) / 1000 };
+      }
+      // 3) format
+      const hx = (b) => b.map(hex2).join(' ');
+      let o = `LazScan ${VERSION} CAN log · ${new Date().toLocaleString()}\nBattery % on screen: ${$n('#lgPct').value || '?'} · Notes: ${$n('#lgNote').value || '-'}\nSweep seconds/block: ${sweepSec} · IDs found: ${ids.length}${cancel ? ' · STOPPED EARLY' : ''}\nSweep counts: ${ids.map((k) => k + '×' + seen[k]).join(' ')}\n`;
+      for (const id of Object.keys(data)) {
+        const { fr, secs } = data[id]; if (!fr.length) { o += `\nID ${id}: no frames while recording\n`; continue; }
+        const len = Math.max(...fr.map((f) => f[1].length)), mn = Array(len).fill(255), mx = Array(len).fill(0);
+        for (const f of fr) f[1].forEach((v, k) => { if (v < mn[k]) mn[k] = v; if (v > mx[k]) mx[k] = v; });
+        const step = Math.max(1, Math.floor(fr.length / 8)), pick = fr.length <= 12 ? fr : fr.filter((f, k) => k % step === 0).slice(0, 8);
+        o += `\nID ${id}: ${fr.length} frames in ${secs.toFixed(1)}s (${(fr.length / secs).toFixed(1)}/s) len=${len}\n  min ${hx(mn)}\n  max ${hx(mx)}\n` + pick.map((f) => `  +${String(f[0]).padStart(4)}ms ${hx(f[1])}`).join('\n') + '\n';
+      }
+      $n('#lgOut').value = o; setBar(1, cancel ? 'Stopped. Partial log below.' : 'Done in ' + Math.round((Date.now() - t00) / 1000) + 's. Copy or save the log.');
+    } catch (e) { const m = friendlyError(e); $n('#lgStat').textContent = m || 'No adapter selected.'; }
+    finally { try { if (wake) wake.release(); } catch (e) {} try { await mon.stop(); } catch (e) {} mon = null; running = false; btn.textContent = 'Start logging'; }
+  }
+  $n('#lgGo').onclick = run;
+  $n('#lgCopy').onclick = async () => { const v = $n('#lgOut').value; if (!v) return; try { await navigator.clipboard.writeText(v); toast('Copied', 'ok'); } catch (e) { $n('#lgOut').select(); toast('Select and copy the text'); } };
+  $n('#lgSave').onclick = () => { const v = $n('#lgOut').value; if (!v) return; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([v], { type: 'text/plain' })); a.download = 'lazscan-can-log-' + Date.now() + '.txt'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
+  openSheet('CAN logger', n, () => { cancel = true; });
+}
+$('rowLog').addEventListener('click', openCanLogger);
 
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('rowInstall').hidden = false; });
